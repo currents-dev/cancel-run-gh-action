@@ -2,35 +2,34 @@
   <a href="https://github.com/actions/typescript-action/actions"><img alt="typescript-action status" src="https://github.com/actions/typescript-action/workflows/build-test/badge.svg"></a>
 </p>
 
-# Cancel Currents run action
+# Cancel Cypress or Playwright Run
 
-This action cancels the current cypress run by calling the Currents API.
+This action cancels the Cypress or Playwright on Currents Dashboard if the associated GitHub workflow gets canceled.
 
 ## Inputs
 
-### `bearer-token`
+### `api-token`
 
-**Required** Bearer authorization token.
+**Required** Currents [API Token](https://currents.dev/readme/api/api-keys)
 
 ### `github-run-id`
 
-**Required** GitHub run id.
+**Required** GitHub Actions run id - should match the [`GITHUB_RUN_ID`](https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables)
 
 ### `github-run-attempt`
 
-**Required** GitHub run attempt.
+**Required** GitHub Actions run attempt - should match the [`GITHUB_RUN_ATTEMPT`](https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables)
 
-## Example usage
+## Example
 
 ```yaml
-- name: Cancel the run if the workflow is cancelled
+- name: Cancel Currents run if the workflow is cancelled
   if: ${{ cancelled() }}
   uses: currents-dev/cancel-run-gh-action@v1
   with:
     api-token: ${{ secrets.CURRENTS_API_TOKEN }}
     github-run-id: ${{ github.run_id }}
     github-run-attempt: ${{ github.run_attempt }}
-
 ```
 
 ## Development
@@ -39,17 +38,20 @@ The repository is made using [this](https://github.com/actions/typescript-action
 
 > First, you'll need to have a reasonably modern version of `node` handy. This won't work with versions older than 9, for instance.
 
-Install the dependencies  
+Install the dependencies
+
 ```bash
 $ npm install
 ```
 
 Build the typescript and package it for distribution
+
 ```bash
 $ npm run build && npm run package
 ```
 
-Run the tests :heavy_check_mark:  
+Run the tests :heavy_check_mark:
+
 ```bash
 $ npm test
 
@@ -78,9 +80,9 @@ import * as core from '@actions/core';
 ...
 
 async function run() {
-  try { 
+  try {
       ...
-  } 
+  }
   catch (error) {
     core.setFailed(error.message);
   }
@@ -93,10 +95,12 @@ See the [toolkit documentation](https://github.com/actions/toolkit/blob/master/R
 
 ## Publish to a distribution branch
 
-Actions are run from GitHub repos so we will checkin the packed dist folder. 
+Actions are run from GitHub repos so we will commit the packed dist folder.
 
 Then run [ncc](https://github.com/zeit/ncc) and push the results:
+
 ```bash
+$ npm run buld
 $ npm run package
 $ git add dist
 $ git commit -a -m "prod dependencies"
@@ -105,7 +109,7 @@ $ git push origin releases/v1
 
 Note: We recommend using the `--license` option for ncc, which will create a license file for all of the production node modules used in your project.
 
-Your action is now published! :rocket: 
+Your action is now published! :rocket:
 
 See the [versioning documentation](https://github.com/actions/toolkit/blob/master/docs/action-versioning.md)
 

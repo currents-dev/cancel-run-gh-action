@@ -1,19 +1,19 @@
-name: "cancel-currents-run"
-description: "Cancels Currents run via the API"
+name: 'cancel-currents-run'
+description: 'Cancels Cypress or Playright runs via Currents API'
 inputs:
   currents-api-url:
-    description: "Currents API URL"
+    description: 'Currents API URL'
     required: false
-    default: "https://api.currents.dev/api/v1"
-  bearer-token:
-    description: "Bearer authentication token"
+    default: 'https://api.currents.dev/api/v1'
+  api-token:
+    description: 'Currents API token'
     required: true
   github-run-id:
-    description: "GitHub run id"
+    description: 'GitHub run id'
     required: true
   github-run-attempt:
-    description: "GitHub run attempt"
+    description: 'GitHub run attempt'
     required: true
 runs:
-  using: "node16"
-  main: "dist/index.js"
+  using: 'node16'
+  main: 'dist/index.js'

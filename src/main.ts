@@ -33,16 +33,14 @@ export async function request<A, B>({
 
 export async function run(): Promise<void> {
   try {
-    const currentsApiUrl = core.getInput('currents-api-url', {
-      required: true
-    })
-    const bearerToken = core.getInput('bearer-token', {required: true})
+    const currentsApiUrl = `https://api.currents.dev/v1`
+    const bearerToken = core.getInput('api-token', {required: true})
     const githubRunId = core.getInput('github-run-id', {required: true})
     const githubRunAttempt = core.getInput('github-run-attempt', {
       required: true
     })
 
-    core.info('Calling the Currents API...')
+    core.info('Cancelling via Currents API...')
     core.info(`GitHub run id: ${githubRunId}`)
     core.info(`GitHub run attempt: ${githubRunAttempt}`)
 
@@ -58,7 +56,7 @@ export async function run(): Promise<void> {
             data: RunCancellation & CancelRunGithubCIRouteParams
           } | null
         >({
-          url: `${currentsApiUrl}/runs/cancel-by-github-ci`,
+          url: `${currentsApiUrl}/runs/cancel-ci/github`,
           bearerToken,
           body: {
             githubRunId,
