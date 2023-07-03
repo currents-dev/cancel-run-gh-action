@@ -33,7 +33,9 @@ export async function request<A, B>({
 
 export async function run(): Promise<void> {
   try {
-    const currentsApiUrl = `https://api.currents.dev/v1`
+    const currentsApiUrl =
+      core.getInput('api-url', {required: false, trimWhitespace: true}) ??
+      `https://api.currents.dev/v1`
     const bearerToken = core.getInput('api-token', {required: true})
     const githubRunId = core.getInput('github-run-id', {required: true})
     const githubRunAttempt = core.getInput('github-run-attempt', {

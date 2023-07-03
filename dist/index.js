@@ -54,9 +54,10 @@ function request({ url, body, bearerToken }) {
 }
 exports.request = request;
 function run() {
+    var _a;
     return __awaiter(this, void 0, void 0, function* () {
         try {
-            const currentsApiUrl = `https://api.currents.dev/v1`;
+            const currentsApiUrl = (_a = core.getInput('api-url', { required: false, trimWhitespace: true })) !== null && _a !== void 0 ? _a : `https://api.currents.dev/v1`;
             const bearerToken = core.getInput('api-token', { required: true });
             const githubRunId = core.getInput('github-run-id', { required: true });
             const githubRunAttempt = core.getInput('github-run-attempt', {

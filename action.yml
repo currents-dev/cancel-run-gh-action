@@ -1,10 +1,10 @@
 name: 'cancel-currents-run'
 description: 'Cancels Cypress or Playright runs via Currents API'
 inputs:
-  currents-api-url:
+  api-url:
     description: 'Currents API URL'
     required: false
-    default: 'https://api.currents.dev/api/v1'
+    default: 'https://api.currents.dev/v1'
   api-token:
     description: 'Currents API token'
     required: true
