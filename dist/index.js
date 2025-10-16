@@ -63,16 +63,29 @@ function run() {
             const githubRunAttempt = core.getInput('github-run-attempt', {
                 required: true
             });
+            const projectId = core.getInput('project-id', { required: false });
+            const ciBuildId = core.getInput('ci-build-id', { required: false });
             core.info('Cancelling via Currents API...');
             core.info(`GitHub run id: ${githubRunId}`);
             core.info(`GitHub run attempt: ${githubRunAttempt}`);
+            if (projectId) {
+                core.info(`Project id: ${projectId}`);
+            }
+            if (ciBuildId) {
+                core.info(`CI build id: ${ciBuildId}`);
+            }
+            if (ciBuildId && !projectId) {
+                core.setFailed('CI build id requires project ID. Please provide both project ID and CI build id if you expect the run to be cancelled based on the CI build id.');
+            }
             const result = yield (0, p_retry_1.default)(() => __awaiter(this, void 0, void 0, function* () {
                 const response = yield request({
                     url: `${currentsApiUrl}/runs/cancel-ci/github`,
                     bearerToken,
                     body: {
                         githubRunId,
-                        githubRunAttempt
+                        githubRunAttempt,
+                        projectId,
+                        ciBuildId
                     }
                 });
                 if (response.result === null) {
