@@ -41,10 +41,23 @@ export async function run(): Promise<void> {
     const githubRunAttempt = core.getInput('github-run-attempt', {
       required: true
     })
+    const projectId = core.getInput('project-id', {required: false})
+    const ciBuildId = core.getInput('ci-build-id', {required: false})
 
     core.info('Cancelling via Currents API...')
     core.info(`GitHub run id: ${githubRunId}`)
     core.info(`GitHub run attempt: ${githubRunAttempt}`)
+    if (projectId) {
+      core.info(`Project id: ${projectId}`)
+    }
+    if (ciBuildId) {
+      core.info(`CI build id: ${ciBuildId}`)
+    }
+    if (ciBuildId && !projectId) {
+      core.setFailed(
+        'CI build id requires project ID. Please provide both project ID and CI build id if you expect the run to be cancelled based on the CI build id.'
+      )
+    }
 
     const result = await pRetry(
       async () => {
@@ -52,6 +65,8 @@ export async function run(): Promise<void> {
           {
             githubRunId: string
             githubRunAttempt: string
+            projectId?: string
+            ciBuildId?: string
           },
           {
             status: ResponseStatus
@@ -62,7 +77,9 @@ export async function run(): Promise<void> {
           bearerToken,
           body: {
             githubRunId,
-            githubRunAttempt
+            githubRunAttempt,
+            projectId,
+            ciBuildId
           }
         })
 
