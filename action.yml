@@ -15,10 +15,10 @@ inputs:
     description: 'GitHub run attempt'
     required: true
   project-id:
-    description: 'Currents project ID (must be provided together with ci-build-id to work)'
+    description: 'Currents project ID. Must be provided along with ci-build-id to identify a run.'
     required: false
   ci-build-id:
-    description: 'CI build ID (must be provided together with project-id to work)'
+    description: 'CI build ID. Must be provided along with project-id to identify a run.'
     required: false
 runs:
   using: 'node16'

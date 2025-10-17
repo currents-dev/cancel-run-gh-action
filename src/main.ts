@@ -11,8 +11,10 @@ export type RunCancellation = {
   reason: string
 }
 export type CancelRunGithubCIRouteParams = {
-  githubRunId: string
-  githubRunAttempt: number
+  githubRunId?: string
+  githubRunAttempt?: number
+  projectId?: string
+  ciBuildId?: string
 }
 
 export async function request<A, B>({
@@ -47,12 +49,23 @@ export async function run(): Promise<void> {
     core.info('Cancelling via Currents API...')
     core.info(`GitHub run id: ${githubRunId}`)
     core.info(`GitHub run attempt: ${githubRunAttempt}`)
-    if (projectId) {
-      core.info(`Project id: ${projectId}`)
+
+    // Always log both optional IDs, and state which identifiers will be used
+    const projectIdProvided = Boolean(projectId)
+    const ciBuildIdProvided = Boolean(ciBuildId)
+    core.info(`Project id: ${projectIdProvided ? projectId : 'not provided'}`)
+    core.info(`CI build id: ${ciBuildIdProvided ? ciBuildId : 'not provided'}`)
+
+    if (projectIdProvided && ciBuildIdProvided) {
+      core.info(
+        'Using project id and CI build id to identify and cancel the run.'
+      )
+    } else {
+      core.info(
+        'Using GitHub run id and attempt to identify and cancel the run.'
+      )
     }
-    if (ciBuildId) {
-      core.info(`CI build id: ${ciBuildId}`)
-    }
+
     if (ciBuildId && !projectId) {
       core.setFailed(
         'CI build id requires project ID. Please provide both project ID and CI build id if you expect the run to be cancelled based on the CI build id.'
