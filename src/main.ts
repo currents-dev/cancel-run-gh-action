@@ -67,7 +67,7 @@ export async function run(): Promise<void> {
     }
 
     if (ciBuildId && !projectId) {
-      core.setFailed(
+      core.info(
         'CI build id requires project ID. Please provide both project ID and CI build id if you expect the run to be cancelled based on the CI build id.'
       )
     }
