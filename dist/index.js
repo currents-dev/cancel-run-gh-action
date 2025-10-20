@@ -68,14 +68,19 @@ function run() {
             core.info('Cancelling via Currents API...');
             core.info(`GitHub run id: ${githubRunId}`);
             core.info(`GitHub run attempt: ${githubRunAttempt}`);
-            if (projectId) {
-                core.info(`Project id: ${projectId}`);
+            // Always log both optional IDs, and state which identifiers will be used
+            const projectIdProvided = Boolean(projectId);
+            const ciBuildIdProvided = Boolean(ciBuildId);
+            core.info(`Project id: ${projectIdProvided ? projectId : 'not provided'}`);
+            core.info(`CI build id: ${ciBuildIdProvided ? ciBuildId : 'not provided'}`);
+            if (projectIdProvided && ciBuildIdProvided) {
+                core.info('Using project id and CI build id to identify and cancel the run.');
             }
-            if (ciBuildId) {
-                core.info(`CI build id: ${ciBuildId}`);
+            else {
+                core.info('Using GitHub run id and attempt to identify and cancel the run.');
             }
             if (ciBuildId && !projectId) {
-                core.setFailed('CI build id requires project ID. Please provide both project ID and CI build id if you expect the run to be cancelled based on the CI build id.');
+                core.info('CI build id requires project ID. Please provide both project ID and CI build id if you expect the run to be cancelled based on the CI build id.');
             }
             const result = yield (0, p_retry_1.default)(() => __awaiter(this, void 0, void 0, function* () {
                 const response = yield request({
