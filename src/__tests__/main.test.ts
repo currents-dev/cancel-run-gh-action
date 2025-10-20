@@ -97,7 +97,7 @@ describe('input validation', () => {
     process.env['INPUT_GITHUB-RUN-ATTEMPT'] = githubRunAttempt
     process.env['INPUT_CI-BUILD-ID'] = 'build-123'
 
-    const spy = jest.spyOn(core, 'setFailed')
+    const spy = jest.spyOn(core, 'info')
 
     await run()
 
