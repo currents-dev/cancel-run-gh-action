@@ -14,6 +14,12 @@ inputs:
   github-run-attempt:
     description: 'GitHub run attempt'
     required: true
+  project-id:
+    description: 'Currents project ID. Must be provided along with ci-build-id to identify a run.'
+    required: false
+  ci-build-id:
+    description: 'CI build ID. Must be provided along with project-id to identify a run.'
+    required: false
 runs:
   using: 'node16'
   main: 'dist/index.js'

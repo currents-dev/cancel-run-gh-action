@@ -11,8 +11,10 @@ export type RunCancellation = {
   reason: string
 }
 export type CancelRunGithubCIRouteParams = {
-  githubRunId: string
-  githubRunAttempt: number
+  githubRunId?: string
+  githubRunAttempt?: number
+  projectId?: string
+  ciBuildId?: string
 }
 
 export async function request<A, B>({
@@ -41,10 +43,34 @@ export async function run(): Promise<void> {
     const githubRunAttempt = core.getInput('github-run-attempt', {
       required: true
     })
+    const projectId = core.getInput('project-id', {required: false})
+    const ciBuildId = core.getInput('ci-build-id', {required: false})
 
     core.info('Cancelling via Currents API...')
     core.info(`GitHub run id: ${githubRunId}`)
     core.info(`GitHub run attempt: ${githubRunAttempt}`)
+
+    // Always log both optional IDs, and state which identifiers will be used
+    const projectIdProvided = Boolean(projectId)
+    const ciBuildIdProvided = Boolean(ciBuildId)
+    core.info(`Project id: ${projectIdProvided ? projectId : 'not provided'}`)
+    core.info(`CI build id: ${ciBuildIdProvided ? ciBuildId : 'not provided'}`)
+
+    if (projectIdProvided && ciBuildIdProvided) {
+      core.info(
+        'Using project id and CI build id to identify and cancel the run.'
+      )
+    } else {
+      core.info(
+        'Using GitHub run id and attempt to identify and cancel the run.'
+      )
+    }
+
+    if (ciBuildId && !projectId) {
+      core.info(
+        'CI build id requires project ID. Please provide both project ID and CI build id if you expect the run to be cancelled based on the CI build id.'
+      )
+    }
 
     const result = await pRetry(
       async () => {
@@ -52,6 +78,8 @@ export async function run(): Promise<void> {
           {
             githubRunId: string
             githubRunAttempt: string
+            projectId?: string
+            ciBuildId?: string
           },
           {
             status: ResponseStatus
@@ -62,7 +90,9 @@ export async function run(): Promise<void> {
           bearerToken,
           body: {
             githubRunId,
-            githubRunAttempt
+            githubRunAttempt,
+            projectId,
+            ciBuildId
           }
         })
 
