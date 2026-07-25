@@ -1,6 +1,6 @@
 {
   "name": "cancel-run-gh-action",
-  "version": "2.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "GitHub action that cancels a Currents run when the workflow that recorded it is cancelled",
   "main": "dist/index.js",
