@@ -33,6 +33,9 @@ const CURRENTS_ENV = [
 
 beforeEach(() => {
   fetchMock.mockReset()
+  // The real setFailed sets process.exitCode, which would fail the jest run
+  // even with every test passing.
+  jest.spyOn(core, 'setFailed').mockImplementation(() => undefined)
   for (const name of Object.keys(process.env)) {
     if (name.startsWith('INPUT_') || CURRENTS_ENV.includes(name)) {
       delete process.env[name]
