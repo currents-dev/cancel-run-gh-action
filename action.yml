@@ -1,25 +1,32 @@
 name: 'cancel-currents-run'
-description: 'Cancels Cypress or Playright runs via Currents API'
+description: 'Cancels a Currents run when the GitHub workflow that recorded it is cancelled'
 inputs:
-  api-url:
-    description: 'Currents API URL'
+  record-key:
+    description: 'Currents record key - the same key the reporting step uses. Requires project-id and ci-build-id.'
     required: false
-    default: 'https://api.currents.dev/v1'
   api-token:
-    description: 'Currents API token'
-    required: true
-  github-run-id:
-    description: 'GitHub run id'
-    required: true
-  github-run-attempt:
-    description: 'GitHub run attempt'
-    required: true
+    description: 'Currents API key. Used when record-key is not provided.'
+    required: false
   project-id:
-    description: 'Currents project ID. Must be provided along with ci-build-id to identify a run.'
+    description: 'Currents project ID. Required with record-key, optional with api-token.'
     required: false
   ci-build-id:
-    description: 'CI build ID. Must be provided along with project-id to identify a run.'
+    description: 'CI build ID the run was recorded with. Required with record-key, optional with api-token.'
     required: false
+  github-run-id:
+    description: 'GitHub run id. Defaults to the current workflow run. Only used with api-token.'
+    required: false
+  github-run-attempt:
+    description: 'GitHub run attempt. Defaults to the current workflow run. Only used with api-token.'
+    required: false
+  director-url:
+    description: 'Currents reporting URL, used with record-key.'
+    required: false
+    default: 'https://cy.currents.dev'
+  api-url:
+    description: 'Currents REST API URL, used with api-token.'
+    required: false
+    default: 'https://api.currents.dev/v1'
 runs:
-  using: 'node16'
+  using: 'node24'
   main: 'dist/index.js'

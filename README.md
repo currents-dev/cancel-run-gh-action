@@ -1,130 +1,98 @@
-<p align="center">
-  <a href="https://github.com/actions/typescript-action/actions"><img alt="typescript-action status" src="https://github.com/actions/typescript-action/workflows/build-test/badge.svg"></a>
-</p>
+# Cancel a Currents run
 
-# Cancel Cypress or Playwright Run
+Cancels a [Currents](https://currents.dev) run when the GitHub Actions workflow that recorded it is cancelled.
 
-This action cancels the Cypress or Playwright on Currents Dashboard if the associated GitHub workflow gets canceled.
-
-## Inputs
-
-### `api-token`
-
-**Required** Currents [API Token](https://currents.dev/readme/api/api-keys)
-
-### `github-run-id`
-
-**Required** GitHub Actions run id - should match the [`GITHUB_RUN_ID`](https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables)
-
-### `github-run-attempt`
-
-**Required** GitHub Actions run attempt - should match the [`GITHUB_RUN_ATTEMPT`](https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables)
-
-## Example
+A cancelled workflow stops reporting mid-run, so without this the run stays in progress until it hits the project's [run timeout](https://docs.currents.dev/dashboard/runs/run-timeouts).
 
 ```yaml
-- name: Cancel Currents run if the workflow is cancelled
+- name: Cancel the Currents run
   if: ${{ cancelled() }}
   uses: currents-dev/cancel-run-gh-action@v1
   with:
-    api-token: ${{ secrets.CURRENTS_API_TOKEN }}
-    github-run-id: ${{ github.run_id }}
-    github-run-attempt: ${{ github.run_attempt }}
+    record-key: ${{ secrets.CURRENTS_RECORD_KEY }}
+    project-id: my-project-id
+    ci-build-id: ${{ github.run_id }}-${{ github.run_attempt }}
+```
+
+## Credentials
+
+The action accepts either credential.
+
+**`record-key`** — the same [record key](https://docs.currents.dev/guides/record-key) the reporting step uses, so the workflow needs no additional secret. It identifies the run by `project-id` and `ci-build-id`, which must match the values the reporting step used.
+
+**`api-token`** — a Currents [API key](https://docs.currents.dev/resources/api/api-keys). It can also identify the run by the GitHub run id and attempt, which the reporter stores on the run, so `project-id` and `ci-build-id` are optional. Kept for workflows that already use it.
+
+If both are provided, `record-key` is used.
+
+## Inputs
+
+| Input                | Required          | Description                                                                              |
+| -------------------- | ----------------- | ---------------------------------------------------------------------------------------- |
+| `record-key`         | one of the two    | Currents record key. Defaults to `CURRENTS_RECORD_KEY` when `api-token` is not set.        |
+| `api-token`          | one of the two    | Currents API key.                                                                          |
+| `project-id`         | with `record-key` | Currents project ID. Defaults to `CURRENTS_PROJECT_ID`.                                    |
+| `ci-build-id`        | with `record-key` | CI build ID the run was recorded with. Defaults to `CURRENTS_CI_BUILD_ID`.                 |
+| `github-run-id`      | no                | Only used with `api-token`. Defaults to the current workflow run.                          |
+| `github-run-attempt` | no                | Only used with `api-token`. Defaults to the current workflow run attempt.                  |
+| `director-url`       | no                | Currents reporting URL, used with `record-key`. Defaults to `https://cy.currents.dev`.     |
+| `api-url`            | no                | Currents REST API URL, used with `api-token`. Defaults to `https://api.currents.dev/v1`.   |
+
+## Behavior
+
+- **No run to cancel.** A workflow cancelled before any results reached Currents has no run. The action logs a warning and succeeds, so it does not add a failed step to an already cancelled workflow.
+- **Already cancelled.** Every job of a parallel run can run this step. All but the first find the run already cancelled, which is reported as a success.
+- **Retries.** Network errors and `429`/`5xx` responses are retried three times with a growing delay. Every other error fails the step.
+
+## Examples
+
+### With the record key the tests already use
+
+```yaml
+env:
+  CURRENTS_RECORD_KEY: ${{ secrets.CURRENTS_RECORD_KEY }}
+  CURRENTS_PROJECT_ID: my-project-id
+  CURRENTS_CI_BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+
+steps:
+  - name: Run tests
+    run: npx playwright test
+
+  - name: Cancel the Currents run
+    if: ${{ cancelled() }}
+    uses: currents-dev/cancel-run-gh-action@v1
+```
+
+The action reads the record key, project and CI build id from the environment the reporting step already sets.
+
+### With an API key
+
+```yaml
+- name: Cancel the Currents run
+  if: ${{ cancelled() }}
+  uses: currents-dev/cancel-run-gh-action@v1
+  with:
+    api-token: ${{ secrets.CURRENTS_API_KEY }}
+```
+
+The run is matched by the GitHub run id and attempt. Add `project-id` and `ci-build-id` to match by CI build id instead, which is what you need when the workflow records under a CI build id of its own.
+
+### Without a GitHub action
+
+The same thing on any CI provider, using the [Currents CLI](https://docs.currents.dev/resources/reporters/currents-cmd/currents-cancel):
+
+```yaml
+- name: Cancel the Currents run
+  if: ${{ cancelled() }}
+  run: npx currents cancel
 ```
 
 ## Development
 
-The repository is made using [this](https://github.com/actions/typescript-action) template
-
-> First, you'll need to have a reasonably modern version of `node` handy. This won't work with versions older than 9, for instance.
-
-Install the dependencies
-
 ```bash
-$ npm install
+npm install
+npm run all     # typecheck, format check, lint, package, test
 ```
 
-Build the typescript and package it for distribution
+`dist/` is the bundle workflows actually run. It is built by `npm run package` and committed — CI fails if it does not match `src/`.
 
-```bash
-$ npm run build && npm run package
-```
-
-Run the tests :heavy_check_mark:
-
-```bash
-$ npm test
-
- PASS  ./index.test.js
-  ✓ throws invalid number (3ms)
-  ✓ wait 500 ms (504ms)
-  ✓ test runs (95ms)
-
-...
-```
-
-### Change action.yml
-
-The action.yml defines the inputs and output for your action.
-
-Update the action.yml with your name, description, inputs and outputs for your action.
-
-See the [documentation](https://help.github.com/en/articles/metadata-syntax-for-github-actions)
-
-### Change the Code
-
-Most toolkit and CI/CD operations involve async operations so the action is run in an async function.
-
-```javascript
-import * as core from '@actions/core';
-...
-
-async function run() {
-  try {
-      ...
-  }
-  catch (error) {
-    core.setFailed(error.message);
-  }
-}
-
-run()
-```
-
-See the [toolkit documentation](https://github.com/actions/toolkit/blob/master/README.md#packages) for the various packages.
-
-## Publish to a distribution branch
-
-Actions are run from GitHub repos so we will commit the packed dist folder.
-
-Then run [ncc](https://github.com/zeit/ncc) and push the results:
-
-```bash
-$ npm run buld
-$ npm run package
-$ git add dist
-$ git commit -a -m "prod dependencies"
-$ git push origin releases/v1
-```
-
-Note: We recommend using the `--license` option for ncc, which will create a license file for all of the production node modules used in your project.
-
-Your action is now published! :rocket:
-
-See the [versioning documentation](https://github.com/actions/toolkit/blob/master/docs/action-versioning.md)
-
-### Validate
-
-You can now validate the action by referencing `./` in a workflow in your repo (see [test.yml](.github/workflows/test.yml))
-
-```yaml
-uses: ./
-with:
-  milliseconds: 1000
-```
-
-See the [actions tab](https://github.com/actions/typescript-action/actions) for runs of this action! :rocket:
-
-### Usage:
-
-After testing you can [create a v1 tag](https://github.com/actions/toolkit/blob/master/docs/action-versioning.md) to reference the stable and latest V1 action
+Releases move the `v1` tag, so `@v1` picks up fixes. See [action versioning](https://github.com/actions/toolkit/blob/main/docs/action-versioning.md).

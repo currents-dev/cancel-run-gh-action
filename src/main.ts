@@ -1,129 +1,65 @@
 import * as core from '@actions/core'
-import {HttpClient} from '@actions/http-client'
-import {BearerCredentialHandler} from '@actions/http-client/lib/auth'
-import {TypedResponse} from '@actions/http-client/lib/interfaces'
-import pRetry, {AbortError} from 'p-retry'
-
-export type ResponseStatus = 'OK' | 'FAILED'
-export type RunCancellation = {
-  actor: string
-  canceledAt: string
-  reason: string
-}
-export type CancelRunGithubCIRouteParams = {
-  githubRunId?: string
-  githubRunAttempt?: number
-  projectId?: string
-  ciBuildId?: string
-}
-
-export async function request<A, B>({
-  url,
-  body,
-  bearerToken
-}: {
-  url: string
-  body: A
-  bearerToken: string
-}): Promise<TypedResponse<B>> {
-  const http = new HttpClient('cancel-currents-run-action', [
-    new BearerCredentialHandler(bearerToken)
-  ])
-
-  return http.putJson<B>(url, body)
-}
+import {CancelResult, cancelWithApiToken, cancelWithRecordKey} from './api'
+import {readApiUrl, readCredentials, readDirectorUrl} from './inputs'
 
 export async function run(): Promise<void> {
   try {
-    const currentsApiUrl =
-      core.getInput('api-url', {required: false, trimWhitespace: true}) ??
-      `https://api.currents.dev/v1`
-    const bearerToken = core.getInput('api-token', {required: true})
-    const githubRunId = core.getInput('github-run-id', {required: true})
-    const githubRunAttempt = core.getInput('github-run-attempt', {
-      required: true
-    })
-    const projectId = core.getInput('project-id', {required: false})
-    const ciBuildId = core.getInput('ci-build-id', {required: false})
+    const credentials = readCredentials()
+    let result: CancelResult
 
-    core.info('Cancelling via Currents API...')
-    core.info(`GitHub run id: ${githubRunId}`)
-    core.info(`GitHub run attempt: ${githubRunAttempt}`)
+    if (credentials.kind === 'record-key') {
+      core.info('Cancelling the run with a record key')
+      core.info(`Project id: ${credentials.projectId}`)
+      core.info(`CI build id: ${credentials.ciBuildId}`)
 
-    // Always log both optional IDs, and state which identifiers will be used
-    const projectIdProvided = Boolean(projectId)
-    const ciBuildIdProvided = Boolean(ciBuildId)
-    core.info(`Project id: ${projectIdProvided ? projectId : 'not provided'}`)
-    core.info(`CI build id: ${ciBuildIdProvided ? ciBuildId : 'not provided'}`)
-
-    if (projectIdProvided && ciBuildIdProvided) {
-      core.info(
-        'Using project id and CI build id to identify and cancel the run.'
-      )
+      result = await cancelWithRecordKey({
+        directorUrl: readDirectorUrl(),
+        recordKey: credentials.recordKey,
+        projectId: credentials.projectId,
+        ciBuildId: credentials.ciBuildId
+      })
     } else {
-      core.info(
-        'Using GitHub run id and attempt to identify and cancel the run.'
-      )
-    }
+      core.info('Cancelling the run with an API key')
+      core.info(`GitHub run id: ${credentials.githubRunId}`)
+      core.info(`GitHub run attempt: ${credentials.githubRunAttempt}`)
+      core.info(`Project id: ${credentials.projectId ?? 'not provided'}`)
+      core.info(`CI build id: ${credentials.ciBuildId ?? 'not provided'}`)
 
-    if (ciBuildId && !projectId) {
-      core.info(
-        'CI build id requires project ID. Please provide both project ID and CI build id if you expect the run to be cancelled based on the CI build id.'
-      )
-    }
-
-    const result = await pRetry(
-      async () => {
-        const response = await request<
-          {
-            githubRunId: string
-            githubRunAttempt: string
-            projectId?: string
-            ciBuildId?: string
-          },
-          {
-            status: ResponseStatus
-            data: RunCancellation & CancelRunGithubCIRouteParams
-          } | null
-        >({
-          url: `${currentsApiUrl}/runs/cancel-ci/github`,
-          bearerToken,
-          body: {
-            githubRunId,
-            githubRunAttempt,
-            projectId,
-            ciBuildId
-          }
-        })
-
-        if (response.result === null) {
-          throw new AbortError('Resource not found')
-        }
-
-        return response
-      },
-      {
-        retries: 3,
-        minTimeout: 1000,
-        maxTimeout: 10000,
-        onFailedAttempt: error => {
-          core.info(
-            `Attempt ${error.attemptNumber} failed. There are ${error.retriesLeft} retries left.`
-          )
-        }
+      if (credentials.ciBuildId && !credentials.projectId) {
+        core.warning(
+          'ci-build-id is only used together with project-id. Falling back to the GitHub run id and attempt.'
+        )
       }
-    )
 
-    if (core.isDebug()) {
-      core.debug(JSON.stringify(result))
+      result = await cancelWithApiToken({
+        apiUrl: readApiUrl(),
+        apiToken: credentials.apiToken,
+        githubRunId: credentials.githubRunId,
+        githubRunAttempt: credentials.githubRunAttempt,
+        projectId: credentials.projectId,
+        ciBuildId: credentials.ciBuildId
+      })
     }
 
-    core.info('The run was successfully canceled!')
+    switch (result.outcome) {
+      case 'cancelled':
+        core.info(
+          result.runId
+            ? `Run ${result.runId} was cancelled`
+            : 'The run was cancelled'
+        )
+        break
+      case 'already-cancelled':
+        core.info('The run was already cancelled')
+        break
+      // Nothing to cancel is the expected outcome when the workflow is
+      // cancelled before any results reach Currents, so it must not fail the
+      // step of an already cancelled workflow.
+      case 'not-found':
+        core.warning(result.message)
+        break
+    }
   } catch (error) {
-    if (error instanceof Error) {
-      core.setFailed(error.message)
-    }
+    core.setFailed(error instanceof Error ? error.message : String(error))
   }
 }
-
-run()
