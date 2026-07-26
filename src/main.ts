@@ -10,13 +10,22 @@ export async function run(): Promise<void> {
     if (credentials.kind === 'record-key') {
       core.info('Cancelling the run with a record key')
       core.info(`Project id: ${credentials.projectId}`)
-      core.info(`CI build id: ${credentials.ciBuildId}`)
+      core.info(
+        credentials.runId
+          ? `Run id: ${credentials.runId}`
+          : `CI build id: ${credentials.ciBuildId}`
+      )
+
+      if (credentials.runId && credentials.ciBuildId) {
+        core.info('Both run-id and ci-build-id were provided, using run-id')
+      }
 
       result = await cancelWithRecordKey({
         directorUrl: readDirectorUrl(),
         recordKey: credentials.recordKey,
         projectId: credentials.projectId,
-        ciBuildId: credentials.ciBuildId
+        ciBuildId: credentials.ciBuildId,
+        runId: credentials.runId
       })
     } else {
       core.info('Cancelling the run with an API key')

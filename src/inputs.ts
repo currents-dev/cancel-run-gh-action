@@ -4,16 +4,17 @@ export const DEFAULT_API_URL = 'https://api.currents.dev/v1'
 export const DEFAULT_DIRECTOR_URL = 'https://cy.currents.dev'
 
 /**
- * The record key path identifies the run the same way the reporter recorded it,
- * so it needs the project and the CI build id. The API token path can also look
- * the run up by the GitHub run id and attempt stored on it.
+ * The record key path identifies the run within a project, by the run id or by
+ * the CI build id it was recorded under. The API token path can also look the
+ * run up by the GitHub run id and attempt stored on it.
  */
 export type Credentials =
   | {
       kind: 'record-key'
       recordKey: string
       projectId: string
-      ciBuildId: string
+      ciBuildId?: string
+      runId?: string
     }
   | {
       kind: 'api-token'
@@ -47,20 +48,27 @@ export function readCredentials(): Credentials {
 
     const projectId = input('project-id', process.env.CURRENTS_PROJECT_ID)
     const ciBuildId = input('ci-build-id', process.env.CURRENTS_CI_BUILD_ID)
-    const missing = [
-      projectId ? null : 'project-id',
-      ciBuildId ? null : 'ci-build-id'
-    ].filter(Boolean)
+    const runId = input('run-id', process.env.CURRENTS_RUN_ID)
 
-    if (missing.length) {
+    if (!projectId) {
       throw new Error(
-        `record-key requires ${missing.join(
-          ' and '
-        )} to identify the run. Pass the same values the reporting step used, or set CURRENTS_PROJECT_ID and CURRENTS_CI_BUILD_ID.`
+        'record-key requires project-id. Pass it to this step, or export CURRENTS_PROJECT_ID on the job.'
       )
     }
 
-    return {kind: 'record-key', recordKey, projectId, ciBuildId}
+    if (!ciBuildId && !runId) {
+      throw new Error(
+        'record-key requires ci-build-id or run-id to identify the run. Pass the same ci-build-id the reporting step used, or export CURRENTS_CI_BUILD_ID or CURRENTS_RUN_ID on the job.'
+      )
+    }
+
+    return {
+      kind: 'record-key',
+      recordKey,
+      projectId,
+      ciBuildId: ciBuildId || undefined,
+      runId: runId || undefined
+    }
   }
 
   if (!apiToken) {

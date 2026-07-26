@@ -1,4 +1,5 @@
 import * as core from '@actions/core'
+import {DEFAULT_DIRECTOR_URL} from './inputs'
 import {sleep} from './sleep'
 
 export type CancelResult =
@@ -100,27 +101,42 @@ export async function cancelWithRecordKey(params: {
   directorUrl: string
   recordKey: string
   projectId: string
-  ciBuildId: string
+  ciBuildId?: string
+  runId?: string
 }): Promise<CancelResult> {
-  const {directorUrl, ...body} = params
-  const response = await request(`${directorUrl}/v1/runs/cancel`, {
+  const {directorUrl, ...rest} = params
+  const url = `${directorUrl}/v1/runs/cancel`
+  const body = Object.fromEntries(
+    Object.entries(rest).filter(([, value]) => value !== undefined)
+  )
+  const response = await request(url, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body)
   })
 
   if (response.status === 200) {
-    const data = response.body?.data as {runId?: string} | undefined
-    return {outcome: 'cancelled', runId: data?.runId}
+    const data = response.body?.data as {runId?: string | null} | undefined
+
+    // The endpoint answers "there is nothing to cancel" with a null runId
+    // rather than an error status, because a workflow cancelled before it
+    // recorded anything never created a run.
+    return data?.runId
+      ? {outcome: 'cancelled', runId: data.runId}
+      : {
+          outcome: 'not-found',
+          message:
+            'No run to cancel. A run only exists once results have been recorded.'
+        }
   }
 
+  // Not a missing run - that is the 200 above. A 404 here is a director
+  // without this route: a wrong director-url, or a self-hosted Currents older
+  // than the release that added it.
   if (response.status === 404) {
-    return {
-      outcome: 'not-found',
-      message:
-        response.text ||
-        'No run was found for the project and CI build id above. A run only exists once results have been recorded.'
-    }
+    throw new Error(
+      `${url} returned 404. Check director-url, which defaults to ${DEFAULT_DIRECTOR_URL}.`
+    )
   }
 
   throw new Error(describe(response))

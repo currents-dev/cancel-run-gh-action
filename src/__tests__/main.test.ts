@@ -9,6 +9,7 @@ const RECORD_KEY = 'record-key'
 const API_TOKEN = 'api-token'
 const PROJECT_ID = 'project-id'
 const CI_BUILD_ID = 'ci-build-id'
+const RUN_ID = 'run-id'
 
 const fetchMock = jest.fn()
 global.fetch = fetchMock as unknown as typeof fetch
@@ -28,7 +29,8 @@ function lastRequest(): {url: string; init: RequestInit; body: unknown} {
 const CURRENTS_ENV = [
   'CURRENTS_RECORD_KEY',
   'CURRENTS_PROJECT_ID',
-  'CURRENTS_CI_BUILD_ID'
+  'CURRENTS_CI_BUILD_ID',
+  'CURRENTS_RUN_ID'
 ]
 
 beforeEach(() => {
@@ -57,14 +59,28 @@ describe('credentials', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  test('fails when record-key is provided without project-id and ci-build-id', async () => {
+  test('fails when record-key is provided without project-id', async () => {
     process.env['INPUT_RECORD-KEY'] = RECORD_KEY
+    process.env['INPUT_CI-BUILD-ID'] = CI_BUILD_ID
     const setFailed = jest.spyOn(core, 'setFailed')
 
     await run()
 
     expect(setFailed).toHaveBeenCalledWith(
-      expect.stringContaining('record-key requires project-id and ci-build-id')
+      expect.stringContaining('record-key requires project-id')
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('fails when record-key is provided without an identifier for the run', async () => {
+    process.env['INPUT_RECORD-KEY'] = RECORD_KEY
+    process.env['INPUT_PROJECT-ID'] = PROJECT_ID
+    const setFailed = jest.spyOn(core, 'setFailed')
+
+    await run()
+
+    expect(setFailed).toHaveBeenCalledWith(
+      expect.stringContaining('record-key requires ci-build-id or run-id')
     )
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -84,6 +100,24 @@ describe('credentials', () => {
       recordKey: RECORD_KEY,
       projectId: PROJECT_ID,
       ciBuildId: CI_BUILD_ID
+    })
+  })
+
+  test('reads the run id from the environment', async () => {
+    process.env['CURRENTS_RECORD_KEY'] = RECORD_KEY
+    process.env['CURRENTS_PROJECT_ID'] = PROJECT_ID
+    process.env['CURRENTS_RUN_ID'] = RUN_ID
+    process.env['INPUT_DIRECTOR-URL'] = DIRECTOR_URL
+    fetchMock.mockResolvedValue(
+      reply(200, {status: 'OK', data: {runId: RUN_ID}})
+    )
+
+    await run()
+
+    expect(lastRequest().body).toEqual({
+      recordKey: RECORD_KEY,
+      projectId: PROJECT_ID,
+      runId: RUN_ID
     })
   })
 
@@ -138,19 +172,53 @@ describe('cancelling with a record key', () => {
     expect(setFailed).not.toHaveBeenCalled()
   })
 
-  test('warns instead of failing when no run was recorded', async () => {
+  test('sends the run id and reports the cancelled run', async () => {
+    process.env['INPUT_RUN-ID'] = RUN_ID
+    const info = jest.spyOn(core, 'info')
+    fetchMock.mockResolvedValue(
+      reply(200, {status: 'OK', data: {runId: RUN_ID}})
+    )
+
+    await run()
+
+    expect(lastRequest().body).toEqual({
+      recordKey: RECORD_KEY,
+      projectId: PROJECT_ID,
+      ciBuildId: CI_BUILD_ID,
+      runId: RUN_ID
+    })
+    expect(info).toHaveBeenCalledWith(
+      'Both run-id and ci-build-id were provided, using run-id'
+    )
+  })
+
+  // The endpoint reports a build with no run as a 200 with a null runId.
+  test('warns instead of failing when there is no run to cancel', async () => {
     const warning = jest.spyOn(core, 'warning')
     const setFailed = jest.spyOn(core, 'setFailed')
     fetchMock.mockResolvedValue(
-      reply(404, 'No run with ciBuildId "ci-build-id" was found')
+      reply(200, {status: 'OK', data: {runId: null, cancellation: null}})
     )
 
     await run()
 
     expect(warning).toHaveBeenCalledWith(
-      'No run with ciBuildId "ci-build-id" was found'
+      expect.stringContaining('No run to cancel')
     )
     expect(setFailed).not.toHaveBeenCalled()
+  })
+
+  test('fails when the director has no cancel route', async () => {
+    const setFailed = jest.spyOn(core, 'setFailed')
+    fetchMock.mockResolvedValue(reply(404, 'Cannot POST /v1/runs/cancel'))
+
+    await run()
+
+    expect(setFailed).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `${DIRECTOR_URL}/v1/runs/cancel returned 404. Check director-url`
+      )
+    )
   })
 
   test('fails on an invalid record key', async () => {

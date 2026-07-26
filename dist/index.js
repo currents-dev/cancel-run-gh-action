@@ -31579,6 +31579,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.cancelWithRecordKey = cancelWithRecordKey;
 exports.cancelWithApiToken = cancelWithApiToken;
 const core = __importStar(__nccwpck_require__(7484));
+const inputs_1 = __nccwpck_require__(8422);
 const sleep_1 = __nccwpck_require__(6972);
 const RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
@@ -31644,22 +31645,31 @@ async function request(url, init) {
  * which accepts the record key the job already holds.
  */
 async function cancelWithRecordKey(params) {
-    const { directorUrl, ...body } = params;
-    const response = await request(`${directorUrl}/v1/runs/cancel`, {
+    const { directorUrl, ...rest } = params;
+    const url = `${directorUrl}/v1/runs/cancel`;
+    const body = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined));
+    const response = await request(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
     });
     if (response.status === 200) {
         const data = response.body?.data;
-        return { outcome: 'cancelled', runId: data?.runId };
+        // The endpoint answers "there is nothing to cancel" with a null runId
+        // rather than an error status, because a workflow cancelled before it
+        // recorded anything never created a run.
+        return data?.runId
+            ? { outcome: 'cancelled', runId: data.runId }
+            : {
+                outcome: 'not-found',
+                message: 'No run to cancel. A run only exists once results have been recorded.'
+            };
     }
+    // Not a missing run - that is the 200 above. A 404 here is a director
+    // without this route: a wrong director-url, or a self-hosted Currents older
+    // than the release that added it.
     if (response.status === 404) {
-        return {
-            outcome: 'not-found',
-            message: response.text ||
-                'No run was found for the project and CI build id above. A run only exists once results have been recorded.'
-        };
+        throw new Error(`${url} returned 404. Check director-url, which defaults to ${inputs_1.DEFAULT_DIRECTOR_URL}.`);
     }
     throw new Error(describe(response));
 }
@@ -31762,14 +31772,20 @@ function readCredentials() {
         }
         const projectId = input('project-id', process.env.CURRENTS_PROJECT_ID);
         const ciBuildId = input('ci-build-id', process.env.CURRENTS_CI_BUILD_ID);
-        const missing = [
-            projectId ? null : 'project-id',
-            ciBuildId ? null : 'ci-build-id'
-        ].filter(Boolean);
-        if (missing.length) {
-            throw new Error(`record-key requires ${missing.join(' and ')} to identify the run. Pass the same values the reporting step used, or set CURRENTS_PROJECT_ID and CURRENTS_CI_BUILD_ID.`);
+        const runId = input('run-id', process.env.CURRENTS_RUN_ID);
+        if (!projectId) {
+            throw new Error('record-key requires project-id. Pass it to this step, or export CURRENTS_PROJECT_ID on the job.');
         }
-        return { kind: 'record-key', recordKey, projectId, ciBuildId };
+        if (!ciBuildId && !runId) {
+            throw new Error('record-key requires ci-build-id or run-id to identify the run. Pass the same ci-build-id the reporting step used, or export CURRENTS_CI_BUILD_ID or CURRENTS_RUN_ID on the job.');
+        }
+        return {
+            kind: 'record-key',
+            recordKey,
+            projectId,
+            ciBuildId: ciBuildId || undefined,
+            runId: runId || undefined
+        };
     }
     if (!apiToken) {
         throw new Error('Provide record-key, or api-token to cancel with a Currents API key.');
@@ -31850,12 +31866,18 @@ async function run() {
         if (credentials.kind === 'record-key') {
             core.info('Cancelling the run with a record key');
             core.info(`Project id: ${credentials.projectId}`);
-            core.info(`CI build id: ${credentials.ciBuildId}`);
+            core.info(credentials.runId
+                ? `Run id: ${credentials.runId}`
+                : `CI build id: ${credentials.ciBuildId}`);
+            if (credentials.runId && credentials.ciBuildId) {
+                core.info('Both run-id and ci-build-id were provided, using run-id');
+            }
             result = await (0, api_1.cancelWithRecordKey)({
                 directorUrl: (0, inputs_1.readDirectorUrl)(),
                 recordKey: credentials.recordKey,
                 projectId: credentials.projectId,
-                ciBuildId: credentials.ciBuildId
+                ciBuildId: credentials.ciBuildId,
+                runId: credentials.runId
             });
         }
         else {

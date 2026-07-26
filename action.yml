@@ -2,16 +2,19 @@ name: 'cancel-currents-run'
 description: 'Cancels a Currents run when the GitHub workflow that recorded it is cancelled'
 inputs:
   record-key:
-    description: 'Currents record key - the same key the reporting step uses. Requires project-id and ci-build-id.'
+    description: 'Currents record key - the same key the reporting step uses. Defaults to CURRENTS_RECORD_KEY. Requires project-id, and ci-build-id or run-id.'
     required: false
   api-token:
     description: 'Currents API key. Used when record-key is not provided.'
     required: false
   project-id:
-    description: 'Currents project ID. Required with record-key, optional with api-token.'
+    description: 'Currents project ID. Required with record-key, where it defaults to CURRENTS_PROJECT_ID. Optional with api-token.'
     required: false
   ci-build-id:
-    description: 'CI build ID the run was recorded with. Required with record-key, optional with api-token.'
+    description: 'CI build ID the run was recorded with. Identifies the run with record-key, where it defaults to CURRENTS_CI_BUILD_ID. Optional with api-token.'
+    required: false
+  run-id:
+    description: 'Currents run ID, an alternative to ci-build-id. Defaults to CURRENTS_RUN_ID. Takes precedence over ci-build-id. Only used with record-key.'
     required: false
   github-run-id:
     description: 'GitHub run id. Defaults to the current workflow run. Only used with api-token.'
