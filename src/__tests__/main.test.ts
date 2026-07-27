@@ -14,11 +14,16 @@ const RUN_ID = 'run-id'
 const fetchMock = jest.fn()
 global.fetch = fetchMock as unknown as typeof fetch
 
-function reply(status: number, body: unknown): Response {
+function reply(
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {}
+): Response {
   return {
     status,
+    headers: {get: (name: string) => headers[name.toLowerCase()] ?? null},
     text: async () => (typeof body === 'string' ? body : JSON.stringify(body))
-  } as Response
+  } as unknown as Response
 }
 
 function lastRequest(): {url: string; init: RequestInit; body: unknown} {
@@ -411,6 +416,28 @@ describe('the destination of a credential', () => {
     expect(warning).toHaveBeenCalledWith(
       expect.stringContaining('over plain http')
     )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('does not follow a redirect away from the checked destination', async () => {
+    process.env['INPUT_RECORD-KEY'] = RECORD_KEY
+    process.env['INPUT_PROJECT-ID'] = PROJECT_ID
+    process.env['INPUT_CI-BUILD-ID'] = CI_BUILD_ID
+    process.env['INPUT_DIRECTOR-URL'] = DIRECTOR_URL
+    const setFailed = jest.spyOn(core, 'setFailed')
+    fetchMock.mockResolvedValue(
+      reply(307, '', {location: 'http://elsewhere.example.com/v1/runs/cancel'})
+    )
+
+    await run()
+
+    expect(fetchMock.mock.calls[0][1].redirect).toBe('manual')
+    expect(setFailed).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'redirected to http://elsewhere.example.com/v1/runs/cancel (HTTP 307)'
+      )
+    )
+    // Not retried: another attempt lands on the same redirect.
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 

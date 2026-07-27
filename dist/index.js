@@ -31587,6 +31587,9 @@ const RETRY_MAX_DELAY_MS = 8000;
 const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 class RetriableError extends Error {
 }
+/** Thrown inside the retry loop for something retrying cannot change. */
+class FatalError extends Error {
+}
 function parseBody(text) {
     try {
         const parsed = JSON.parse(text);
@@ -31637,15 +31640,25 @@ async function request(url, init) {
     checkDestination(url);
     for (let attempt = 1;; attempt++) {
         try {
-            const response = await fetch(url, init);
+            // redirect: 'manual' - fetch follows redirects by default, and a 307/308
+            // repeats the request, body included, against whatever host the Location
+            // names. That would hand the record key to a destination checkDestination
+            // never saw.
+            const response = await fetch(url, { ...init, redirect: 'manual' });
             const text = await response.text();
             const result = { status: response.status, body: parseBody(text), text };
+            if (response.status >= 300 && response.status < 400) {
+                throw new FatalError(`${url} redirected to ${response.headers.get('location') ?? 'an unnamed location'} (HTTP ${response.status}). Redirects are not followed, because the request carries a credential.`);
+            }
             if (RETRIABLE_STATUS.has(response.status)) {
                 throw new RetriableError(describe(result));
             }
             return result;
         }
         catch (error) {
+            if (error instanceof FatalError) {
+                throw error;
+            }
             // Anything fetch itself throws is a transport failure - the URL was
             // already validated above.
             const message = error instanceof Error ? error.message : String(error);
