@@ -4,8 +4,23 @@ updates:
     directory: /
     schedule:
       interval: daily
+    groups:
+      actions:
+        patterns:
+          - '*'
 
+  # One PR per group rather than one per package: everything here is tooling
+  # around a single runtime dependency, @actions/core.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: daily
+    groups:
+      dependencies:
+        dependency-type: production
+        patterns:
+          - '*'
+      dev-dependencies:
+        dependency-type: development
+        patterns:
+          - '*'

@@ -1,27 +1,41 @@
 name: 'build-test'
-on: # rebuild any PRs and main branch changes
+on:
   pull_request:
   push:
     branches:
       - main
       - 'releases/*'
 
+permissions:
+  contents: read
+
 jobs:
-  build: # make sure build/ci work properly
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - run: |
-          npm install
-      - run: |
-          npm run all
-  test: # make sure the action works on a clean machine without building
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: ./
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          currents-api-url: 'http://localhost:4000'
-          bearer-token: token
-          github-run-id: ${{ github.run_id }}
-          github-run-attempt: ${{ github.run_attempt }}
+          node-version: 24.x
+          cache: npm
+      - run: npm ci
+      - run: npm run all
+
+  test:
+    # Runs the packaged action the way a consumer would. Pointed at a port
+    # nothing listens on, so it exercises the retry and failure path.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./
+        id: cancel
+        continue-on-error: true
+        with:
+          api-url: 'http://localhost:4000/v1'
+          api-token: token
+      - name: The step fails, the workflow does not
+        run: |
+          if [ "${{ steps.cancel.outcome }}" != "failure" ]; then
+            echo "Expected the action to fail against an unreachable API"
+            exit 1
+          fi
