@@ -64,6 +64,7 @@ With `record-key`, `project-id` and one of `ci-build-id` / `run-id` must be avai
 - **No run to cancel.** A workflow cancelled before any results reached Currents has no run. The action logs a warning and succeeds, so it does not add a failed step to an already cancelled workflow.
 - **Already cancelled.** Every job of a parallel run can run this step. All but the first find the run already cancelled, which is reported as a success.
 - **Retries.** Network errors and `429`/`5xx` responses are retried three times with a growing delay. Every other error fails the step.
+- **Where the credential goes.** `director-url` and `api-url` are not pinned to a host, because self-hosted Currents needs them. A URL that is not `http`/`https` fails the step before anything is sent, and sending a credential over plain `http` to anything but localhost logs a warning.
 
 ## Examples
 

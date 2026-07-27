@@ -31610,13 +31610,31 @@ function describe(response) {
             : truncate(response.text) || 'no response body';
     return `${message} (HTTP ${response.status})`;
 }
-async function request(url, init) {
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+/**
+ * Every request here carries a credential, so the destination is checked before
+ * it is sent. The host itself is not pinned: `director-url` and `api-url` exist
+ * for self-hosted Currents, and the smoke test in `test.yml` points them at
+ * localhost.
+ */
+function checkDestination(url) {
+    let destination;
     try {
-        new URL(url);
+        destination = new URL(url);
     }
     catch {
         throw new Error(`"${url}" is not a valid URL`);
     }
+    if (destination.protocol !== 'https:' && destination.protocol !== 'http:') {
+        throw new Error(`"${url}" is not an http or https URL`);
+    }
+    if (destination.protocol === 'http:' &&
+        !LOOPBACK_HOSTS.has(destination.hostname)) {
+        core.warning(`Sending the credential to ${destination.host} over plain http. Use https unless this host is on a trusted network.`);
+    }
+}
+async function request(url, init) {
+    checkDestination(url);
     for (let attempt = 1;; attempt++) {
         try {
             const response = await fetch(url, init);

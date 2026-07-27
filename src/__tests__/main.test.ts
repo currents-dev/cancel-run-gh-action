@@ -381,3 +381,53 @@ describe('retries', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })
+
+describe('the destination of a credential', () => {
+  test('fails without a request when the URL is not http', async () => {
+    process.env['INPUT_API-TOKEN'] = API_TOKEN
+    process.env['INPUT_API-URL'] = 'file:///etc'
+    const setFailed = jest.spyOn(core, 'setFailed')
+
+    await run()
+
+    expect(setFailed).toHaveBeenCalledWith(
+      '"file:///etc/runs/cancel-ci/github" is not an http or https URL'
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('warns when a credential goes over plain http to another host', async () => {
+    process.env['INPUT_RECORD-KEY'] = RECORD_KEY
+    process.env['INPUT_PROJECT-ID'] = PROJECT_ID
+    process.env['INPUT_CI-BUILD-ID'] = CI_BUILD_ID
+    process.env['INPUT_DIRECTOR-URL'] = 'http://currents.example.com'
+    const warning = jest.spyOn(core, 'warning')
+    fetchMock.mockResolvedValue(
+      reply(200, {status: 'OK', data: {runId: 'run-1'}})
+    )
+
+    await run()
+
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining('over plain http')
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('does not warn for https, or for a loopback host', async () => {
+    process.env['INPUT_RECORD-KEY'] = RECORD_KEY
+    process.env['INPUT_PROJECT-ID'] = PROJECT_ID
+    process.env['INPUT_CI-BUILD-ID'] = CI_BUILD_ID
+    const warning = jest.spyOn(core, 'warning')
+    fetchMock.mockResolvedValue(
+      reply(200, {status: 'OK', data: {runId: 'run-1'}})
+    )
+
+    // The default director-url, https.
+    await run()
+    process.env['INPUT_DIRECTOR-URL'] = DIRECTOR_URL
+    await run()
+
+    expect(warning).not.toHaveBeenCalled()
+  })
+})
