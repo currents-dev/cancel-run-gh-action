@@ -106,13 +106,15 @@ The run is matched by the GitHub run id and attempt. Add `project-id` and `ci-bu
 
 ### Without a GitHub action
 
-The same thing on any CI provider, using the [Currents CLI](https://docs.currents.dev/resources/reporters/currents-cmd/currents-cancel):
+The same thing on any CI provider, using [`currents run cancel`](https://docs.currents.dev/resources/reporters/currents-cmd/currents-cancel) from `@currents/cmd` 2.x:
 
 ```yaml
 - name: Cancel the Currents run
   if: ${{ cancelled() }}
-  run: npx currents cancel
+  run: npx --package @currents/cmd@2 currents run cancel
 ```
+
+The step reads `CURRENTS_RECORD_KEY`, `CURRENTS_PROJECT_ID` and `CURRENTS_CI_BUILD_ID` from the job's environment, like the action with no inputs. `npx --package @currents/cmd@2` runs `@currents/cmd` 2.x whether or not the project installs it, and also when the project pins 1.x, which has no `run cancel`. Without the package, `npx currents` runs an unrelated npm package.
 
 ## Development
 
