@@ -49,7 +49,10 @@ major_tag="v${version%%.*}"
 
 # --sort=-v:refname orders by version rather than by what git describe can
 # reach, and the glob keeps matching once a component reaches two digits.
-latest_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+# new_tag is excluded: on a resume it is already tagged here, and counting it
+# as the last release would hide the major it is succeeding.
+latest_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
+	grep -vFx "$new_tag" | head -n 1 || true)
 
 # An existing tag on this very commit is a run that died after tagging - the
 # steps below are idempotent, so pick up where it stopped. Anywhere else, the
@@ -115,8 +118,11 @@ fi
 
 if [ -n "$previous_major" ] && [ "$previous_major" != "$major_tag" ] &&
 	git rev-parse -q --verify "refs/tags/$previous_major" >/dev/null &&
-	! git rev-parse -q --verify "refs/heads/releases/$previous_major" >/dev/null; then
-	git branch "releases/$previous_major" "refs/tags/$previous_major"
+	[ -z "$(git ls-remote --heads "$remote" "refs/heads/releases/$previous_major")" ]; then
+	# The remote decides whether this is published; a local branch left over
+	# from a failed push is reused rather than treated as done.
+	git rev-parse -q --verify "refs/heads/releases/$previous_major" >/dev/null ||
+		git branch "releases/$previous_major" "refs/tags/$previous_major"
 	git push --set-upstream "$remote" "releases/$previous_major"
 	echo -e "Branch: ${GREEN}releases/${previous_major}${OFF} keeps the ${previous_major} line patchable"
 fi
