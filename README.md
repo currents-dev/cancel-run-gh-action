@@ -129,4 +129,14 @@ npm run all     # typecheck, format check, lint, package, test
 
 Releases move the `v1` tag, so `@v1` picks up fixes. See [action versioning](https://github.com/actions/toolkit/blob/main/docs/action-versioning.md).
 
+Bump `version` in `package.json`, merge that to `main`, then cut the release:
+
+```bash
+script/release
+```
+
+The script reads the version from `package.json` — it refuses to run on a dirty tree, off `main`, behind the remote, or with a version that is not above the last release — then tags `vX.Y.Z`, moves `v1` to it, and publishes the release notes with `gh`. A new major leaves the previous one on a `releases/v#` branch so it stays patchable.
+
+Both tags go up in one atomic push, so a rejected `v1` cannot leave a published `vX.Y.Z` behind. If a release does fail part way, fix the cause and run `script/release` again on the same commit: it picks up where it stopped.
+
 The `record-key` credential calls `POST /v1/runs/cancel` on the Currents reporting service. Deploy that endpoint before moving `v1`, or every workflow on `@v1` that uses a record key fails with a 404. The `api-token` path is unaffected.
