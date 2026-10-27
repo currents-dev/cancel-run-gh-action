@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+
+# Tags a release and moves the major tag, so workflows on `@v1` pick it up.
+#
+# package.json holds the version: bump and merge that first, then run this on
+# main. Adapted from the actions/typescript-action release script, with the
+# version read instead of typed, the pre-flight checks that script leaves to
+# the operator, and a GitHub release.
+#
+# See: https://github.com/actions/toolkit/blob/main/docs/action-versioning.md
+#
+# Usage: script/release
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+remote='origin'
+release_branch='main'
+
+OFF='\033[0m'
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+BLUE='\033[1;34m'
+
+die() {
+	echo -e "${RED}$1${OFF}" >&2
+	exit 1
+}
+
+# The release is whatever main points at, so make sure that is what the
+# operator thinks it is before anything is tagged.
+[ -z "$(git status --porcelain)" ] || die 'The working tree has uncommitted changes.'
+
+branch=$(git rev-parse --abbrev-ref HEAD)
+[ "$branch" = "$release_branch" ] || die "On $branch - releases are cut from $release_branch."
+
+git fetch --tags "$remote" "$release_branch"
+[ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ] ||
+	die "$release_branch is not level with $remote/$release_branch - pull first."
+
+version=$(node -p 'require("./package.json").version')
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "package.json version '$version' is not X.Y.Z."
+
+new_tag="v$version"
+major_tag="v${version%%.*}"
+
+# --sort=-v:refname orders by version rather than by what git describe can
+# reach, and the glob keeps matching once a component reaches two digits.
+latest_tag=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+
+! git rev-parse -q --verify "refs/tags/$new_tag" >/dev/null ||
+	die "Tag $new_tag already exists - bump the version in package.json first."
+
+echo -e "Latest release: ${BLUE}${latest_tag:-none}${OFF}"
+echo -e "New release:    ${BLUE}${new_tag}${OFF} at $(git log -1 --format='%h %s')"
+
+if git rev-parse -q --verify "refs/tags/$major_tag" >/dev/null; then
+	major_exists='yes'
+	echo -e "                moves ${BLUE}${major_tag}${OFF} from $(git log -1 --format='%h %s' "$major_tag")"
+else
+	major_exists='no'
+	echo -e "                creates ${BLUE}${major_tag}${OFF}"
+fi
+
+# Moving the major tag ships this to everyone on @v1 at once, including the
+# endpoints the action calls. See the Releases section of the README.
+echo 'Every workflow on the major tag picks this up immediately.'
+read -r -p 'Tag and push? [y/N] ' reply || reply=''
+[[ $reply =~ ^[Yy]$ ]] || die 'Aborted - nothing was tagged.'
+
+git tag --annotate --message "$new_tag" "$new_tag"
+git push "$remote" "$new_tag"
+echo -e "Tagged: ${GREEN}${new_tag}${OFF}"
+
+git tag --annotate --force --message "Sync $major_tag with $new_tag" "$major_tag"
+git push --force "$remote" "$major_tag"
+if [ "$major_exists" = 'yes' ]; then
+	echo -e "Moved:  ${GREEN}${major_tag}${OFF} -> ${GREEN}${new_tag}${OFF}"
+else
+	echo -e "Tagged: ${GREEN}${major_tag}${OFF} -> ${GREEN}${new_tag}${OFF}"
+fi
+
+# A new major leaves the old one without a moving tag, so keep its line
+# patchable on a branch.
+previous_major=""
+if [ -n "$latest_tag" ]; then
+	previous_major="${latest_tag#v}"
+	previous_major="v${previous_major%%.*}"
+fi
+
+if [ -n "$previous_major" ] && [ "$previous_major" != "$major_tag" ] &&
+	git rev-parse -q --verify "refs/tags/$previous_major" >/dev/null &&
+	! git rev-parse -q --verify "refs/heads/releases/$previous_major" >/dev/null; then
+	git branch "releases/$previous_major" "refs/tags/$previous_major"
+	git push --set-upstream "$remote" "releases/$previous_major"
+	echo -e "Branch: ${GREEN}releases/${previous_major}${OFF} keeps the ${previous_major} line patchable"
+fi
+
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+	gh release create "$new_tag" --title "$new_tag" --generate-notes
+else
+	echo "gh unavailable - publish the notes with: gh release create $new_tag --generate-notes"
+fi
+
+echo -e "${GREEN}Done.${OFF}"
