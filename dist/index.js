@@ -31946,6 +31946,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.truncate = truncate;
+exports.request = request;
 exports.cancelWithRecordKey = cancelWithRecordKey;
 exports.cancelWithApiToken = cancelWithApiToken;
 const core = __importStar(__nccwpck_require__(7484));
@@ -32006,7 +32008,7 @@ function checkDestination(url) {
         core.warning(`Sending the credential to ${destination.host} over plain http. Use https unless this host is on a trusted network.`);
     }
 }
-async function request(url, init) {
+async function request(url, init, { retries = RETRIES } = {}) {
     checkDestination(url);
     for (let attempt = 1;; attempt++) {
         try {
@@ -32032,11 +32034,11 @@ async function request(url, init) {
             // Anything fetch itself throws is a transport failure - the URL was
             // already validated above.
             const message = error instanceof Error ? error.message : String(error);
-            if (attempt > RETRIES) {
+            if (attempt > retries) {
                 throw new Error(message);
             }
             const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS);
-            core.info(`Attempt ${attempt} of ${RETRIES + 1} failed: ${message}. Retrying in ${delay}ms.`);
+            core.info(`Attempt ${attempt} of ${retries + 1} failed: ${message}. Retrying in ${delay}ms.`);
             await (0, sleep_1.sleep)(delay);
         }
     }
@@ -32158,6 +32160,28 @@ exports.DEFAULT_DIRECTOR_URL = 'https://cy.currents.dev';
 function input(name, fallback) {
     return core.getInput(name, { trimWhitespace: true }) || fallback || '';
 }
+/** GitHub sets both variables only for a job with `id-token: write`. */
+function hasGitHubOidc() {
+    return Boolean(process.env.ACTIONS_ID_TOKEN_REQUEST_URL?.trim() &&
+        process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN?.trim());
+}
+/** `credential` names the credential in the errors. */
+function readRunIdentifiers(credential) {
+    const projectId = input('project-id', process.env.CURRENTS_PROJECT_ID);
+    const ciBuildId = input('ci-build-id', process.env.CURRENTS_CI_BUILD_ID);
+    const runId = input('run-id', process.env.CURRENTS_RUN_ID);
+    if (!projectId) {
+        throw new Error(`${credential} requires project-id. Pass it to this step, or export CURRENTS_PROJECT_ID on the job.`);
+    }
+    if (!ciBuildId && !runId) {
+        throw new Error(`${credential} requires ci-build-id or run-id to identify the run. Pass the same ci-build-id the reporting step used, or export CURRENTS_CI_BUILD_ID or CURRENTS_RUN_ID on the job.`);
+    }
+    return {
+        projectId,
+        ciBuildId: ciBuildId || undefined,
+        runId: runId || undefined
+    };
+}
 function readCredentials() {
     const apiToken = input('api-token');
     // The env fallback only applies when api-token is absent: a workflow that
@@ -32171,25 +32195,13 @@ function readCredentials() {
         if (apiToken) {
             core.info('Both record-key and api-token were provided, using record-key');
         }
-        const projectId = input('project-id', process.env.CURRENTS_PROJECT_ID);
-        const ciBuildId = input('ci-build-id', process.env.CURRENTS_CI_BUILD_ID);
-        const runId = input('run-id', process.env.CURRENTS_RUN_ID);
-        if (!projectId) {
-            throw new Error('record-key requires project-id. Pass it to this step, or export CURRENTS_PROJECT_ID on the job.');
-        }
-        if (!ciBuildId && !runId) {
-            throw new Error('record-key requires ci-build-id or run-id to identify the run. Pass the same ci-build-id the reporting step used, or export CURRENTS_CI_BUILD_ID or CURRENTS_RUN_ID on the job.');
-        }
-        return {
-            kind: 'record-key',
-            recordKey,
-            projectId,
-            ciBuildId: ciBuildId || undefined,
-            runId: runId || undefined
-        };
+        return { kind: 'record-key', recordKey, ...readRunIdentifiers('record-key') };
     }
     if (!apiToken) {
-        throw new Error('Provide record-key, or api-token to cancel with a Currents API key.');
+        if (hasGitHubOidc()) {
+            return { kind: 'oidc', ...readRunIdentifiers('GitHub Actions OIDC') };
+        }
+        throw new Error('Provide record-key, or api-token to cancel with a Currents API key. Without a stored record key, add `permissions: id-token: write` to the job to get a record key from its GitHub Actions OIDC token.');
     }
     core.setSecret(apiToken);
     // Both are always set by the runner, so the inputs only exist to override them.
@@ -32260,11 +32272,16 @@ exports.run = run;
 const core = __importStar(__nccwpck_require__(7484));
 const api_1 = __nccwpck_require__(6879);
 const inputs_1 = __nccwpck_require__(8422);
+const oidc_1 = __nccwpck_require__(6434);
 async function run() {
     try {
         const credentials = (0, inputs_1.readCredentials)();
         let result;
-        if (credentials.kind === 'record-key') {
+        if (credentials.kind !== 'api-token') {
+            const directorUrl = (0, inputs_1.readDirectorUrl)();
+            const recordKey = credentials.kind === 'record-key'
+                ? credentials.recordKey
+                : await (0, oidc_1.getRecordKeyFromOidc)(directorUrl);
             core.info('Cancelling the run with a record key');
             core.info(`Project id: ${credentials.projectId}`);
             core.info(credentials.runId
@@ -32273,13 +32290,20 @@ async function run() {
             if (credentials.runId && credentials.ciBuildId) {
                 core.info('Both run-id and ci-build-id were provided, using run-id');
             }
-            result = await (0, api_1.cancelWithRecordKey)({
-                directorUrl: (0, inputs_1.readDirectorUrl)(),
-                recordKey: credentials.recordKey,
-                projectId: credentials.projectId,
-                ciBuildId: credentials.ciBuildId,
-                runId: credentials.runId
-            });
+            try {
+                result = await (0, api_1.cancelWithRecordKey)({
+                    directorUrl,
+                    recordKey,
+                    projectId: credentials.projectId,
+                    ciBuildId: credentials.ciBuildId,
+                    runId: credentials.runId
+                });
+            }
+            finally {
+                if (credentials.kind === 'oidc') {
+                    await (0, oidc_1.revokeRecordKey)(directorUrl, recordKey);
+                }
+            }
         }
         else {
             core.info('Cancelling the run with an API key');
@@ -32318,6 +32342,145 @@ async function run() {
     }
     catch (error) {
         core.setFailed(error instanceof Error ? error.message : String(error));
+    }
+}
+
+
+/***/ }),
+
+/***/ 6434:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getOidcAudience = getOidcAudience;
+exports.getRecordKeyFromOidc = getRecordKeyFromOidc;
+exports.revokeRecordKey = revokeRecordKey;
+const core = __importStar(__nccwpck_require__(7484));
+const api_1 = __nccwpck_require__(6879);
+const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
+const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:jwt';
+const TOKEN_NAME = 'GitHub Actions OIDC token';
+const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' };
+/**
+ * The origin of the director URL: a token minted for one Currents deployment is
+ * refused by another. The Currents reporters derive it the same way.
+ */
+function getOidcAudience(directorUrl) {
+    try {
+        return new URL(directorUrl).origin;
+    }
+    catch {
+        throw new Error(`"${directorUrl}" is not a valid URL`);
+    }
+}
+/** `error_description` of the OAuth error, then `error`, then the response. */
+function describeOAuthError(response) {
+    const body = response.body ?? {};
+    for (const field of [body.error_description, body.error]) {
+        if (typeof field === 'string' && field) {
+            return field;
+        }
+    }
+    return (0, api_1.truncate)(response.text) || `HTTP ${response.status}`;
+}
+/**
+ * Exchanges the job's GitHub Actions OIDC token (RFC 8693) for a short-lived
+ * record key.
+ */
+async function getRecordKeyFromOidc(directorUrl) {
+    const audience = getOidcAudience(directorUrl);
+    let oidcToken;
+    try {
+        // getIDToken masks the token in the log.
+        oidcToken = await core.getIDToken(audience);
+    }
+    catch (error) {
+        throw new Error(`Could not get the ${TOKEN_NAME}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const exchangeError = (message) => new Error(`Could not exchange the ${TOKEN_NAME} for a record key: ${message}`);
+    let response;
+    try {
+        response = await (0, api_1.request)(`${directorUrl}/oidc/token`, {
+            method: 'POST',
+            headers: FORM_HEADERS,
+            body: new URLSearchParams({
+                grant_type: GRANT_TYPE,
+                subject_token: oidcToken,
+                subject_token_type: SUBJECT_TOKEN_TYPE
+            }).toString()
+        });
+    }
+    catch (error) {
+        throw exchangeError(error instanceof Error ? error.message : String(error));
+    }
+    if (response.status !== 200) {
+        throw exchangeError(describeOAuthError(response));
+    }
+    const { access_token: recordKey, expires_in: expiresIn } = response.body ?? {};
+    if (typeof recordKey !== 'string' || !recordKey) {
+        throw exchangeError('the response has no access token');
+    }
+    core.setSecret(recordKey);
+    core.info(typeof expiresIn === 'number'
+        ? `Using a record key from the ${TOKEN_NAME}, valid until ${new Date(Date.now() + expiresIn * 1000).toISOString()}`
+        : `Using a record key from the ${TOKEN_NAME}`);
+    return recordKey;
+}
+/**
+ * The key is only needed for the cancel request. One attempt: on failure the
+ * key still expires on its own, so it only gets a debug line.
+ */
+async function revokeRecordKey(directorUrl, recordKey) {
+    try {
+        const response = await (0, api_1.request)(`${directorUrl}/oidc/revoke`, {
+            method: 'POST',
+            headers: FORM_HEADERS,
+            body: new URLSearchParams({
+                token: recordKey,
+                token_type_hint: 'access_token'
+            }).toString()
+        }, { retries: 0 });
+        core.debug(response.status === 200
+            ? 'Revoked the record key from OIDC'
+            : `Could not revoke the record key from OIDC: ${describeOAuthError(response)}`);
+    }
+    catch (error) {
+        core.debug(`Could not revoke the record key from OIDC: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
