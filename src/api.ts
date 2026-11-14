@@ -60,17 +60,17 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
  * for self-hosted Currents, and the smoke test in `test.yml` points them at
  * localhost.
  */
-function checkDestination(url: string): void {
+function checkDestination(url: string, name: string): void {
   let destination: URL
 
   try {
     destination = new URL(url)
   } catch {
-    throw new Error(`"${url}" is not a valid URL`)
+    throw new Error(`${name} is not a valid URL`)
   }
 
   if (destination.protocol !== 'https:' && destination.protocol !== 'http:') {
-    throw new Error(`"${url}" is not an http or https URL`)
+    throw new Error(`${name} is not an http or https URL`)
   }
 
   if (
@@ -83,12 +83,16 @@ function checkDestination(url: string): void {
   }
 }
 
+/**
+ * `label` names the request in messages instead of the URL and the Location of
+ * a redirect, for a URL that holds a credential.
+ */
 export async function request(
   url: string,
-  init: {method: string; headers: Record<string, string>; body: string},
-  {retries = RETRIES}: {retries?: number} = {}
+  init: {method: string; headers: Record<string, string>; body?: string},
+  {retries = RETRIES, label}: {retries?: number; label?: string} = {}
 ): Promise<HttpResponse> {
-  checkDestination(url)
+  checkDestination(url, label ?? `"${url}"`)
 
   for (let attempt = 1; ; attempt++) {
     try {
@@ -101,10 +105,13 @@ export async function request(
       const result = {status: response.status, body: parseBody(text), text}
 
       if (response.status >= 300 && response.status < 400) {
+        const location = label
+          ? 'another location'
+          : (response.headers.get('location') ?? 'an unnamed location')
         throw new FatalError(
-          `${url} redirected to ${
-            response.headers.get('location') ?? 'an unnamed location'
-          } (HTTP ${response.status}). Redirects are not followed, because the request carries a credential.`
+          `${label ?? url} redirected to ${location} (HTTP ${
+            response.status
+          }). Redirects are not followed, because the request carries a credential.`
         )
       }
 

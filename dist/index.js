@@ -31992,24 +31992,28 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
  * for self-hosted Currents, and the smoke test in `test.yml` points them at
  * localhost.
  */
-function checkDestination(url) {
+function checkDestination(url, name) {
     let destination;
     try {
         destination = new URL(url);
     }
     catch {
-        throw new Error(`"${url}" is not a valid URL`);
+        throw new Error(`${name} is not a valid URL`);
     }
     if (destination.protocol !== 'https:' && destination.protocol !== 'http:') {
-        throw new Error(`"${url}" is not an http or https URL`);
+        throw new Error(`${name} is not an http or https URL`);
     }
     if (destination.protocol === 'http:' &&
         !LOOPBACK_HOSTS.has(destination.hostname)) {
         core.warning(`Sending the credential to ${destination.host} over plain http. Use https unless this host is on a trusted network.`);
     }
 }
-async function request(url, init, { retries = RETRIES } = {}) {
-    checkDestination(url);
+/**
+ * `label` names the request in messages instead of the URL and the Location of
+ * a redirect, for a URL that holds a credential.
+ */
+async function request(url, init, { retries = RETRIES, label } = {}) {
+    checkDestination(url, label ?? `"${url}"`);
     for (let attempt = 1;; attempt++) {
         try {
             // redirect: 'manual' - fetch follows redirects by default, and a 307/308
@@ -32020,7 +32024,10 @@ async function request(url, init, { retries = RETRIES } = {}) {
             const text = await response.text();
             const result = { status: response.status, body: parseBody(text), text };
             if (response.status >= 300 && response.status < 400) {
-                throw new FatalError(`${url} redirected to ${response.headers.get('location') ?? 'an unnamed location'} (HTTP ${response.status}). Redirects are not followed, because the request carries a credential.`);
+                const location = label
+                    ? 'another location'
+                    : (response.headers.get('location') ?? 'an unnamed location');
+                throw new FatalError(`${label ?? url} redirected to ${location} (HTTP ${response.status}). Redirects are not followed, because the request carries a credential.`);
             }
             if (RETRIABLE_STATUS.has(response.status)) {
                 throw new RetriableError(describe(result));
@@ -32419,6 +32426,42 @@ function describeOAuthError(response) {
     return (0, api_1.truncate)(response.text) || `HTTP ${response.status}`;
 }
 /**
+ * Not core.getIDToken: its HTTP client follows redirects and sends the request
+ * token to the redirect host, and it logs the request URL before anything
+ * masks it.
+ */
+async function getGitHubOidcToken(audience) {
+    // readCredentials checked that both are set.
+    const requestUrl = (process.env.ACTIONS_ID_TOKEN_REQUEST_URL ?? '').trim();
+    const requestToken = (process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN ?? '').trim();
+    core.setSecret(requestUrl);
+    core.setSecret(requestToken);
+    let url;
+    try {
+        url = new URL(requestUrl);
+    }
+    catch {
+        throw new Error('ACTIONS_ID_TOKEN_REQUEST_URL is not a valid URL');
+    }
+    url.searchParams.set('audience', audience);
+    const response = await (0, api_1.request)(url.href, {
+        method: 'GET',
+        headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${requestToken}`
+        }
+    }, { label: 'The GitHub OIDC token request' });
+    if (response.status !== 200) {
+        throw new Error(`GitHub did not issue a token (HTTP ${response.status})`);
+    }
+    const token = response.body?.value;
+    if (typeof token !== 'string' || !token) {
+        throw new Error('the response from GitHub has no token');
+    }
+    core.setSecret(token);
+    return token;
+}
+/**
  * Exchanges the job's GitHub Actions OIDC token (RFC 8693) for a short-lived
  * record key. The server uses `project_id` to find the organization whose
  * trust policies it checks the token against, and refuses an exchange without
@@ -32428,8 +32471,7 @@ async function getRecordKeyFromOidc(directorUrl, projectId) {
     const audience = getOidcAudience(directorUrl);
     let oidcToken;
     try {
-        // getIDToken masks the token in the log.
-        oidcToken = await core.getIDToken(audience);
+        oidcToken = await getGitHubOidcToken(audience);
     }
     catch (error) {
         throw new Error(`Could not get the ${TOKEN_NAME}: ${error instanceof Error ? error.message : String(error)}`);

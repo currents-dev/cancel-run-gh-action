@@ -1,3 +1,4 @@
+import {EOL} from 'os'
 import * as core from '@actions/core'
 import {run} from '../main'
 
@@ -467,7 +468,21 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
   const OIDC_TOKEN = 'header.oidc-token-payload.signature'
   const OIDC_RECORD_KEY = 'crnts_ci_exchanged-key'
 
-  let getIDToken: jest.SpyInstance
+  // The secret part of the URL GitHub gives the job.
+  const REQUEST_URL_SECRET = 'request-url-secret'
+  const REQUEST_URL = `https://token.actions.example.com/${REQUEST_URL_SECRET}?api-version=2.0`
+  const REQUEST_TOKEN = 'request-token'
+
+  // Requests to GitHub go to githubFetch, the rest to fetchMock.
+  const githubFetch = jest.fn()
+
+  function githubIssued(): Response {
+    return reply(200, {value: OIDC_TOKEN})
+  }
+
+  function requestedAudience(): string | null {
+    return new URL(githubFetch.mock.calls[0][0]).searchParams.get('audience')
+  }
 
   function exchanged(): Response {
     return reply(200, {
@@ -488,13 +503,21 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
   }
 
   beforeEach(() => {
-    process.env['ACTIONS_ID_TOKEN_REQUEST_URL'] =
-      'https://token.actions.example.com/token?api-version=2.0'
-    process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = 'request-token'
+    process.env['ACTIONS_ID_TOKEN_REQUEST_URL'] = REQUEST_URL
+    process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = REQUEST_TOKEN
     process.env['INPUT_PROJECT-ID'] = PROJECT_ID
     process.env['INPUT_CI-BUILD-ID'] = CI_BUILD_ID
     process.env['INPUT_DIRECTOR-URL'] = DIRECTOR_URL
-    getIDToken = jest.spyOn(core, 'getIDToken').mockResolvedValue(OIDC_TOKEN)
+    githubFetch.mockReset()
+    githubFetch.mockResolvedValue(githubIssued())
+    global.fetch = (async (url: string, init: RequestInit) =>
+      url.startsWith('https://token.actions.example.com/')
+        ? githubFetch(url, init)
+        : fetchMock(url, init)) as unknown as typeof fetch
+  })
+
+  afterEach(() => {
+    global.fetch = fetchMock as unknown as typeof fetch
   })
 
   test('exchanges the OIDC token and cancels with the record key it gets', async () => {
@@ -508,7 +531,12 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
 
     await run()
 
-    expect(getIDToken).toHaveBeenCalledWith(DIRECTOR_URL)
+    const [githubUrl, githubInit] = githubFetch.mock.calls[0]
+    expect(requestedAudience()).toBe(DIRECTOR_URL)
+    expect(githubUrl).toContain('api-version=2.0')
+    expect(githubInit.method).toBe('GET')
+    expect(githubInit.redirect).toBe('manual')
+    expect(githubInit.headers.Authorization).toBe(`Bearer ${REQUEST_TOKEN}`)
 
     const exchange = formRequest(0)
     expect(exchange.url).toBe(`${DIRECTOR_URL}/oidc/token`)
@@ -559,7 +587,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
 
     await run()
 
-    expect(getIDToken).toHaveBeenCalledWith('https://currents.example.com')
+    expect(requestedAudience()).toBe('https://currents.example.com')
   })
 
   test('requests the token for https://cy.currents.dev by default', async () => {
@@ -568,7 +596,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
 
     await run()
 
-    expect(getIDToken).toHaveBeenCalledWith('https://cy.currents.dev')
+    expect(requestedAudience()).toBe('https://cy.currents.dev')
   })
 
   test('uses a record key when one is provided', async () => {
@@ -579,7 +607,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
 
     await run()
 
-    expect(getIDToken).not.toHaveBeenCalled()
+    expect(githubFetch).not.toHaveBeenCalled()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(lastRequest().body).toMatchObject({recordKey: RECORD_KEY})
   })
@@ -591,7 +619,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
 
     await run()
 
-    expect(getIDToken).not.toHaveBeenCalled()
+    expect(githubFetch).not.toHaveBeenCalled()
     expect(lastRequest().url).toBe(`${API_URL}/runs/cancel-ci/github`)
   })
 
@@ -601,7 +629,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
 
     await run()
 
-    expect(getIDToken).not.toHaveBeenCalled()
+    expect(githubFetch).not.toHaveBeenCalled()
     expect(setFailed).toHaveBeenCalledWith(
       expect.stringContaining('permissions: id-token: write')
     )
@@ -616,22 +644,85 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     expect(setFailed).toHaveBeenCalledWith(
       expect.stringContaining('GitHub Actions OIDC requires project-id')
     )
-    expect(getIDToken).not.toHaveBeenCalled()
+    expect(githubFetch).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
   test('fails when GitHub does not issue a token', async () => {
-    getIDToken.mockRejectedValue(
-      new Error('Error message: Failed to get ID Token.')
-    )
+    githubFetch.mockResolvedValue(reply(403, {message: 'Forbidden'}))
     const setFailed = jest.spyOn(core, 'setFailed')
 
     await run()
 
     expect(setFailed).toHaveBeenCalledWith(
-      'Could not get the GitHub Actions OIDC token: Error message: Failed to get ID Token.'
+      'Could not get the GitHub Actions OIDC token: GitHub did not issue a token (HTTP 403)'
     )
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('fails when the response from GitHub has no token', async () => {
+    githubFetch.mockResolvedValue(reply(200, {}))
+    const setFailed = jest.spyOn(core, 'setFailed')
+
+    await run()
+
+    expect(setFailed).toHaveBeenCalledWith(
+      'Could not get the GitHub Actions OIDC token: the response from GitHub has no token'
+    )
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('does not follow a redirect of the GitHub token request', async () => {
+    githubFetch.mockResolvedValue(
+      reply(307, '', {location: 'https://elsewhere.example.com/token'})
+    )
+    const setFailed = jest.spyOn(core, 'setFailed')
+
+    await run()
+
+    expect(githubFetch).toHaveBeenCalledTimes(1)
+    expect(githubFetch.mock.calls[0][1].redirect).toBe('manual')
+    expect(setFailed).toHaveBeenCalledWith(
+      'Could not get the GitHub Actions OIDC token: The GitHub OIDC token request redirected to another location (HTTP 307). Redirects are not followed, because the request carries a credential.'
+    )
+    // Not retried, and nothing goes to the redirect host.
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('masks the request URL and token before any output', async () => {
+    const output: string[] = []
+    const write = jest
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((chunk: string | Uint8Array) => {
+        output.push(String(chunk))
+        return true
+      })
+    process.env['RUNNER_DEBUG'] = '1'
+
+    try {
+      fetchMock
+        .mockResolvedValueOnce(exchanged())
+        .mockResolvedValueOnce(
+          reply(200, {status: 'OK', data: {runId: 'run-1'}})
+        )
+        .mockResolvedValueOnce(reply(200, ''))
+      await run()
+    } finally {
+      delete process.env['RUNNER_DEBUG']
+      write.mockRestore()
+    }
+
+    const firstUse = output.findIndex(
+      line =>
+        !line.startsWith('::add-mask::') &&
+        (line.includes(REQUEST_URL_SECRET) || line.includes(REQUEST_TOKEN))
+    )
+    expect(firstUse).toBe(-1)
+    expect(output.slice(0, 2)).toEqual([
+      `::add-mask::${REQUEST_URL}${EOL}`,
+      `::add-mask::${REQUEST_TOKEN}${EOL}`
+    ])
+    expect(output).toContain(`::add-mask::${OIDC_TOKEN}${EOL}`)
   })
 
   test('fails when the exchange is disabled on the server', async () => {
@@ -800,6 +891,12 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     }
 
     expect(logged.length).toBeGreaterThan(0)
-    expect(logged.join('\n')).not.toContain(OIDC_TOKEN)
+    // ::add-mask:: is how the runner learns what to hide.
+    const shown = logged
+      .filter(line => !line.startsWith('::add-mask::'))
+      .join('\n')
+    for (const secret of [OIDC_TOKEN, REQUEST_TOKEN, REQUEST_URL_SECRET]) {
+      expect(shown).not.toContain(secret)
+    }
   })
 })

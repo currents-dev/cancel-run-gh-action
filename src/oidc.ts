@@ -33,6 +33,54 @@ function describeOAuthError(response: HttpResponse): string {
 }
 
 /**
+ * Not core.getIDToken: its HTTP client follows redirects and sends the request
+ * token to the redirect host, and it logs the request URL before anything
+ * masks it.
+ */
+async function getGitHubOidcToken(audience: string): Promise<string> {
+  // readCredentials checked that both are set.
+  const requestUrl = (process.env.ACTIONS_ID_TOKEN_REQUEST_URL ?? '').trim()
+  const requestToken = (process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN ?? '').trim()
+  core.setSecret(requestUrl)
+  core.setSecret(requestToken)
+
+  let url: URL
+
+  try {
+    url = new URL(requestUrl)
+  } catch {
+    throw new Error('ACTIONS_ID_TOKEN_REQUEST_URL is not a valid URL')
+  }
+
+  url.searchParams.set('audience', audience)
+
+  const response = await request(
+    url.href,
+    {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${requestToken}`
+      }
+    },
+    {label: 'The GitHub OIDC token request'}
+  )
+
+  if (response.status !== 200) {
+    throw new Error(`GitHub did not issue a token (HTTP ${response.status})`)
+  }
+
+  const token = response.body?.value
+
+  if (typeof token !== 'string' || !token) {
+    throw new Error('the response from GitHub has no token')
+  }
+
+  core.setSecret(token)
+  return token
+}
+
+/**
  * Exchanges the job's GitHub Actions OIDC token (RFC 8693) for a short-lived
  * record key. The server uses `project_id` to find the organization whose
  * trust policies it checks the token against, and refuses an exchange without
@@ -46,8 +94,7 @@ export async function getRecordKeyFromOidc(
   let oidcToken: string
 
   try {
-    // getIDToken masks the token in the log.
-    oidcToken = await core.getIDToken(audience)
+    oidcToken = await getGitHubOidcToken(audience)
   } catch (error) {
     throw new Error(
       `Could not get the ${TOKEN_NAME}: ${

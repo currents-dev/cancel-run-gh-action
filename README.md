@@ -66,7 +66,7 @@ With `record-key`, `project-id` and one of `ci-build-id` / `run-id` must be avai
 - **No run to cancel.** A workflow cancelled before any results reached Currents has no run. The action logs a warning and succeeds, so it does not add a failed step to an already cancelled workflow.
 - **Already cancelled.** Every job of a parallel run can run this step. All but the first find the run already cancelled, which is reported as a success.
 - **Retries.** Network errors and `429`/`5xx` responses are retried three times with a growing delay. Every other error fails the step.
-- **Where the credential goes.** The OIDC token and the record key it is exchanged for go through the same checks as the other credentials. `director-url` and `api-url` are not pinned to a host, because self-hosted Currents needs them. A URL that is not `http`/`https` fails the step before anything is sent, sending a credential over plain `http` to anything but localhost logs a warning, and redirects are not followed — a `307` would repeat the request, credential included, against a host that was never checked.
+- **Where the credential goes.** The request to GitHub for the OIDC token, the OIDC token, and the record key it is exchanged for go through the same checks as the other credentials. The GitHub request URL and token are masked before the action writes anything to the log. `director-url` and `api-url` are not pinned to a host, because self-hosted Currents needs them. A URL that is not `http`/`https` fails the step before anything is sent, sending a credential over plain `http` to anything but localhost logs a warning, and redirects are not followed — a `307` would repeat the request, credential included, against a host that was never checked.
 
 ## Examples
 
