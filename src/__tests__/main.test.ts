@@ -517,7 +517,8 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     expect(Object.fromEntries(exchange.form)).toEqual({
       grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
       subject_token: OIDC_TOKEN,
-      subject_token_type: 'urn:ietf:params:oauth:token-type:jwt'
+      subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+      project_id: PROJECT_ID
     })
 
     const [cancelUrl, cancelInit] = fetchMock.mock.calls[1]
@@ -540,6 +541,16 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     )
     expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
     expect(setFailed).not.toHaveBeenCalled()
+  })
+
+  test('sends CURRENTS_PROJECT_ID as the project of the exchange', async () => {
+    delete process.env['INPUT_PROJECT-ID']
+    process.env['CURRENTS_PROJECT_ID'] = 'project-from-env'
+    fetchMock.mockResolvedValue(reply(404, {}))
+
+    await run()
+
+    expect(formRequest(0).form.get('project_id')).toBe('project-from-env')
   })
 
   test('requests the token for the origin of director-url', async () => {

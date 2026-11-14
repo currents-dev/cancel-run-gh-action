@@ -32281,7 +32281,7 @@ async function run() {
             const directorUrl = (0, inputs_1.readDirectorUrl)();
             const recordKey = credentials.kind === 'record-key'
                 ? credentials.recordKey
-                : await (0, oidc_1.getRecordKeyFromOidc)(directorUrl);
+                : await (0, oidc_1.getRecordKeyFromOidc)(directorUrl, credentials.projectId);
             core.info('Cancelling the run with a record key');
             core.info(`Project id: ${credentials.projectId}`);
             core.info(credentials.runId
@@ -32420,9 +32420,10 @@ function describeOAuthError(response) {
 }
 /**
  * Exchanges the job's GitHub Actions OIDC token (RFC 8693) for a short-lived
- * record key.
+ * record key of the project. The server refuses an exchange without
+ * `project_id`.
  */
-async function getRecordKeyFromOidc(directorUrl) {
+async function getRecordKeyFromOidc(directorUrl, projectId) {
     const audience = getOidcAudience(directorUrl);
     let oidcToken;
     try {
@@ -32441,7 +32442,8 @@ async function getRecordKeyFromOidc(directorUrl) {
             body: new URLSearchParams({
                 grant_type: GRANT_TYPE,
                 subject_token: oidcToken,
-                subject_token_type: SUBJECT_TOKEN_TYPE
+                subject_token_type: SUBJECT_TOKEN_TYPE,
+                project_id: projectId
             }).toString()
         });
     }

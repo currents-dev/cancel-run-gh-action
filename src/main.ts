@@ -13,7 +13,7 @@ export async function run(): Promise<void> {
       const recordKey =
         credentials.kind === 'record-key'
           ? credentials.recordKey
-          : await getRecordKeyFromOidc(directorUrl)
+          : await getRecordKeyFromOidc(directorUrl, credentials.projectId)
 
       core.info('Cancelling the run with a record key')
       core.info(`Project id: ${credentials.projectId}`)

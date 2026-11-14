@@ -34,10 +34,12 @@ function describeOAuthError(response: HttpResponse): string {
 
 /**
  * Exchanges the job's GitHub Actions OIDC token (RFC 8693) for a short-lived
- * record key.
+ * record key of the project. The server refuses an exchange without
+ * `project_id`.
  */
 export async function getRecordKeyFromOidc(
-  directorUrl: string
+  directorUrl: string,
+  projectId: string
 ): Promise<string> {
   const audience = getOidcAudience(directorUrl)
   let oidcToken: string
@@ -67,7 +69,8 @@ export async function getRecordKeyFromOidc(
       body: new URLSearchParams({
         grant_type: GRANT_TYPE,
         subject_token: oidcToken,
-        subject_token_type: SUBJECT_TOKEN_TYPE
+        subject_token_type: SUBJECT_TOKEN_TYPE,
+        project_id: projectId
       }).toString()
     })
   } catch (error) {
