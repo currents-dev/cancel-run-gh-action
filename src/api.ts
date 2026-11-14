@@ -14,7 +14,7 @@ const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504])
 
 type ResponseBody = Record<string, unknown> | null
 
-type HttpResponse = {
+export type HttpResponse = {
   status: number
   body: ResponseBody
   text: string
@@ -36,7 +36,7 @@ function parseBody(text: string): ResponseBody {
   }
 }
 
-function truncate(text: string, max = 200): string {
+export function truncate(text: string, max = 200): string {
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
@@ -83,9 +83,10 @@ function checkDestination(url: string): void {
   }
 }
 
-async function request(
+export async function request(
   url: string,
-  init: {method: string; headers: Record<string, string>; body: string}
+  init: {method: string; headers: Record<string, string>; body: string},
+  {retries = RETRIES}: {retries?: number} = {}
 ): Promise<HttpResponse> {
   checkDestination(url)
 
@@ -121,7 +122,7 @@ async function request(
       // already validated above.
       const message = error instanceof Error ? error.message : String(error)
 
-      if (attempt > RETRIES) {
+      if (attempt > retries) {
         throw new Error(message)
       }
 
@@ -131,7 +132,7 @@ async function request(
       )
       core.info(
         `Attempt ${attempt} of ${
-          RETRIES + 1
+          retries + 1
         } failed: ${message}. Retrying in ${delay}ms.`
       )
       await sleep(delay)
