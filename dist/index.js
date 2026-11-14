@@ -32420,8 +32420,9 @@ function describeOAuthError(response) {
 }
 /**
  * Exchanges the job's GitHub Actions OIDC token (RFC 8693) for a short-lived
- * record key of the project. The server refuses an exchange without
- * `project_id`.
+ * record key. The server uses `project_id` to find the organization whose
+ * trust policies it checks the token against, and refuses an exchange without
+ * it.
  */
 async function getRecordKeyFromOidc(directorUrl, projectId) {
     const audience = getOidcAudience(directorUrl);

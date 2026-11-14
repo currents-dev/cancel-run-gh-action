@@ -29,7 +29,7 @@ The action accepts either credential.
 
 **`api-token`** — a Currents [API key](https://docs.currents.dev/resources/api/api-keys). It can also identify the run by the GitHub run id and attempt, which the reporter stores on the run, so nothing else is required. Kept for workflows that already use it.
 
-**GitHub Actions OIDC** — with neither `record-key` (or `CURRENTS_RECORD_KEY`) nor `api-token`, a job with `permissions: id-token: write` gets a short-lived record key from its OIDC token, like the Currents reporters do. The token's audience is the origin of `director-url`, `https://cy.currents.dev` by default. The action exchanges the token at `director-url` for a record key of `project-id`, cancels with the record key it gets, then revokes that key. It needs `project-id` and `ci-build-id` or `run-id`, as with `record-key`. Pull requests from forks get no OIDC token.
+**GitHub Actions OIDC** — with neither `record-key` (or `CURRENTS_RECORD_KEY`) nor `api-token`, a job with `permissions: id-token: write` gets a short-lived record key from its OIDC token, like the Currents reporters do. The token's audience is the origin of `director-url`, `https://cy.currents.dev` by default. The action sends the token and `project-id` to `director-url` and gets back a short-lived record key, cancels with it, then revokes it. It needs `project-id` and `ci-build-id` or `run-id`, as with `record-key`. Pull requests from forks get no OIDC token.
 
 If more than one is available, `record-key` is used first, then `api-token`, then OIDC.
 
