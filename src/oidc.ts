@@ -6,6 +6,8 @@ const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:jwt'
 const TOKEN_NAME = 'GitHub Actions OIDC token'
 
 const FORM_HEADERS = {'Content-Type': 'application/x-www-form-urlencoded'}
+/** Revoke runs after the cancel and only saves the key's remaining minutes. */
+const REVOKE_TIMEOUT_MS = 5_000
 
 /** `error_description` of the OAuth error, then `error`, then the response. */
 function describeOAuthError(response: HttpResponse): string {
@@ -158,7 +160,7 @@ export async function revokeRecordKey(
           token_type_hint: 'access_token'
         }).toString()
       },
-      {retries: 0}
+      {retries: 0, timeoutMs: REVOKE_TIMEOUT_MS}
     )
 
     core.debug(

@@ -31957,6 +31957,8 @@ const RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
 const RETRY_MAX_DELAY_MS = 8000;
 const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+/** Per attempt, for the response headers and the body together. */
+const REQUEST_TIMEOUT_MS = 30_000;
 class RetriableError extends Error {
 }
 /** Thrown inside the retry loop for something retrying cannot change. */
@@ -32012,15 +32014,23 @@ function checkDestination(url, name) {
  * `label` names the request in messages instead of the URL and the Location of
  * a redirect, for a URL that holds a credential.
  */
-async function request(url, init, { retries = RETRIES, label } = {}) {
+async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
     checkDestination(url, label ?? `"${url}"`);
     for (let attempt = 1;; attempt++) {
+        const deadline = new AbortController();
+        const timer = setTimeout(() => {
+            deadline.abort(new Error(`${label ?? url} did not respond within ${timeoutMs / 1000} seconds`));
+        }, timeoutMs);
         try {
             // redirect: 'manual' - fetch follows redirects by default, and a 307/308
             // repeats the request, body included, against whatever host the Location
             // names. That would hand the record key to a destination checkDestination
             // never saw.
-            const response = await fetch(url, { ...init, redirect: 'manual' });
+            const response = await fetch(url, {
+                ...init,
+                redirect: 'manual',
+                signal: deadline.signal
+            });
             const text = await response.text();
             const result = { status: response.status, body: parseBody(text), text };
             if (response.status >= 300 && response.status < 400) {
@@ -32047,6 +32057,9 @@ async function request(url, init, { retries = RETRIES, label } = {}) {
             const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS);
             core.info(`Attempt ${attempt} of ${retries + 1} failed: ${message}. Retrying in ${delay}ms.`);
             await (0, sleep_1.sleep)(delay);
+        }
+        finally {
+            clearTimeout(timer);
         }
     }
 }
@@ -32415,6 +32428,8 @@ const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
 const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:jwt';
 const TOKEN_NAME = 'GitHub Actions OIDC token';
 const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' };
+/** Revoke runs after the cancel and only saves the key's remaining minutes. */
+const REVOKE_TIMEOUT_MS = 5_000;
 /** `error_description` of the OAuth error, then `error`, then the response. */
 function describeOAuthError(response) {
     const body = response.body ?? {};
@@ -32518,7 +32533,7 @@ async function revokeRecordKey(directorUrl, recordKey) {
                 token: recordKey,
                 token_type_hint: 'access_token'
             }).toString()
-        }, { retries: 0 });
+        }, { retries: 0, timeoutMs: REVOKE_TIMEOUT_MS });
         core.debug(response.status === 200
             ? 'Revoked the record key from OIDC'
             : `Could not revoke the record key from OIDC: ${describeOAuthError(response)}`);

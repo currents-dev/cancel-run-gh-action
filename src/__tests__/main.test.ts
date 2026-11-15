@@ -27,6 +27,22 @@ function reply(
   } as unknown as Response
 }
 
+/** A server that never answers: settles only when the request is aborted. */
+function stalled(init: RequestInit): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+  })
+}
+
+/** A server that sends the headers and then never finishes the body. */
+function stalledBody(init: RequestInit): Response {
+  return {
+    status: 200,
+    headers: {get: () => null},
+    text: async () => stalled(init)
+  } as unknown as Response
+}
+
 function lastRequest(): {url: string; init: RequestInit; body: unknown} {
   const [url, init] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
   return {url, init, body: JSON.parse(init.body)}
@@ -570,6 +586,75 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     )
     expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
     expect(setFailed).not.toHaveBeenCalled()
+  })
+
+  describe('a server that does not respond', () => {
+    beforeEach(() => {
+      jest.useFakeTimers()
+    })
+
+    afterEach(() => {
+      jest.useRealTimers()
+    })
+
+    test('gives up on the revoke after 5 seconds, and the cancel still succeeds', async () => {
+      const setFailed = jest.spyOn(core, 'setFailed')
+      const info = jest.spyOn(core, 'info')
+      fetchMock
+        .mockResolvedValueOnce(exchanged())
+        .mockResolvedValueOnce(
+          reply(200, {status: 'OK', data: {runId: 'run-1'}})
+        )
+        .mockImplementationOnce((_url: string, init: RequestInit) =>
+          stalled(init)
+        )
+
+      const done = run()
+      await jest.advanceTimersByTimeAsync(5_000)
+      await done
+
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
+      expect(setFailed).not.toHaveBeenCalled()
+    })
+
+    test('gives up on an exchange whose body never ends after 30 seconds an attempt', async () => {
+      const setFailed = jest.spyOn(core, 'setFailed')
+      fetchMock.mockImplementation((_url: string, init: RequestInit) =>
+        stalledBody(init)
+      )
+
+      const done = run()
+      for (let attempt = 0; attempt < 4; attempt++) {
+        await jest.advanceTimersByTimeAsync(30_000)
+      }
+      await done
+
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+      expect(setFailed).toHaveBeenCalledWith(
+        expect.stringContaining('did not respond within 30 seconds')
+      )
+    })
+
+    test('gives up on a GitHub token request that never answers', async () => {
+      const setFailed = jest.spyOn(core, 'setFailed')
+      githubFetch.mockImplementation((_url: string, init: RequestInit) =>
+        stalled(init)
+      )
+
+      const done = run()
+      for (let attempt = 0; attempt < 4; attempt++) {
+        await jest.advanceTimersByTimeAsync(30_000)
+      }
+      await done
+
+      expect(setFailed).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'The GitHub OIDC token request did not respond within 30 seconds'
+        )
+      )
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
   })
 
   test('sends CURRENTS_PROJECT_ID as the project of the exchange', async () => {

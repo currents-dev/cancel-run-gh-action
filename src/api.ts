@@ -11,6 +11,8 @@ const RETRIES = 3
 const RETRY_BASE_DELAY_MS = 1000
 const RETRY_MAX_DELAY_MS = 8000
 const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504])
+/** Per attempt, for the response headers and the body together. */
+const REQUEST_TIMEOUT_MS = 30_000
 
 type ResponseBody = Record<string, unknown> | null
 
@@ -90,17 +92,34 @@ function checkDestination(url: string, name: string): void {
 export async function request(
   url: string,
   init: {method: string; headers: Record<string, string>; body?: string},
-  {retries = RETRIES, label}: {retries?: number; label?: string} = {}
+  {
+    retries = RETRIES,
+    label,
+    timeoutMs = REQUEST_TIMEOUT_MS
+  }: {retries?: number; label?: string; timeoutMs?: number} = {}
 ): Promise<HttpResponse> {
   checkDestination(url, label ?? `"${url}"`)
 
   for (let attempt = 1; ; attempt++) {
+    const deadline = new AbortController()
+    const timer = setTimeout(() => {
+      deadline.abort(
+        new Error(
+          `${label ?? url} did not respond within ${timeoutMs / 1000} seconds`
+        )
+      )
+    }, timeoutMs)
+
     try {
       // redirect: 'manual' - fetch follows redirects by default, and a 307/308
       // repeats the request, body included, against whatever host the Location
       // names. That would hand the record key to a destination checkDestination
       // never saw.
-      const response = await fetch(url, {...init, redirect: 'manual'})
+      const response = await fetch(url, {
+        ...init,
+        redirect: 'manual',
+        signal: deadline.signal
+      })
       const text = await response.text()
       const result = {status: response.status, body: parseBody(text), text}
 
@@ -143,6 +162,8 @@ export async function request(
         } failed: ${message}. Retrying in ${delay}ms.`
       )
       await sleep(delay)
+    } finally {
+      clearTimeout(timer)
     }
   }
 }
