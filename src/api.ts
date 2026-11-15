@@ -11,10 +11,12 @@ const RETRIES = 3
 const RETRY_BASE_DELAY_MS = 1000
 const RETRY_MAX_DELAY_MS = 8000
 const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504])
+/** Per attempt, for the response headers and the body together. */
+const REQUEST_TIMEOUT_MS = 30_000
 
 type ResponseBody = Record<string, unknown> | null
 
-type HttpResponse = {
+export type HttpResponse = {
   status: number
   body: ResponseBody
   text: string
@@ -36,7 +38,7 @@ function parseBody(text: string): ResponseBody {
   }
 }
 
-function truncate(text: string, max = 200): string {
+export function truncate(text: string, max = 200): string {
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
@@ -60,17 +62,17 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
  * for self-hosted Currents, and the smoke test in `test.yml` points them at
  * localhost.
  */
-function checkDestination(url: string): void {
+function checkDestination(url: string, name: string): void {
   let destination: URL
 
   try {
     destination = new URL(url)
   } catch {
-    throw new Error(`"${url}" is not a valid URL`)
+    throw new Error(`${name} is not a valid URL`)
   }
 
   if (destination.protocol !== 'https:' && destination.protocol !== 'http:') {
-    throw new Error(`"${url}" is not an http or https URL`)
+    throw new Error(`${name} is not an http or https URL`)
   }
 
   if (
@@ -83,27 +85,52 @@ function checkDestination(url: string): void {
   }
 }
 
-async function request(
+/**
+ * `label` names the request in messages instead of the URL and the Location of
+ * a redirect, for a URL that holds a credential.
+ */
+export async function request(
   url: string,
-  init: {method: string; headers: Record<string, string>; body: string}
+  init: {method: string; headers: Record<string, string>; body?: string},
+  {
+    retries = RETRIES,
+    label,
+    timeoutMs = REQUEST_TIMEOUT_MS
+  }: {retries?: number; label?: string; timeoutMs?: number} = {}
 ): Promise<HttpResponse> {
-  checkDestination(url)
+  checkDestination(url, label ?? `"${url}"`)
 
   for (let attempt = 1; ; attempt++) {
+    const deadline = new AbortController()
+    const timer = setTimeout(() => {
+      deadline.abort(
+        new Error(
+          `${label ?? url} did not respond within ${timeoutMs / 1000} seconds`
+        )
+      )
+    }, timeoutMs)
+
     try {
       // redirect: 'manual' - fetch follows redirects by default, and a 307/308
       // repeats the request, body included, against whatever host the Location
       // names. That would hand the record key to a destination checkDestination
       // never saw.
-      const response = await fetch(url, {...init, redirect: 'manual'})
+      const response = await fetch(url, {
+        ...init,
+        redirect: 'manual',
+        signal: deadline.signal
+      })
       const text = await response.text()
       const result = {status: response.status, body: parseBody(text), text}
 
       if (response.status >= 300 && response.status < 400) {
+        const location = label
+          ? 'another location'
+          : (response.headers.get('location') ?? 'an unnamed location')
         throw new FatalError(
-          `${url} redirected to ${
-            response.headers.get('location') ?? 'an unnamed location'
-          } (HTTP ${response.status}). Redirects are not followed, because the request carries a credential.`
+          `${label ?? url} redirected to ${location} (HTTP ${
+            response.status
+          }). Redirects are not followed, because the request carries a credential.`
         )
       }
 
@@ -121,7 +148,7 @@ async function request(
       // already validated above.
       const message = error instanceof Error ? error.message : String(error)
 
-      if (attempt > RETRIES) {
+      if (attempt > retries) {
         throw new Error(message)
       }
 
@@ -131,10 +158,12 @@ async function request(
       )
       core.info(
         `Attempt ${attempt} of ${
-          RETRIES + 1
+          retries + 1
         } failed: ${message}. Retrying in ${delay}ms.`
       )
       await sleep(delay)
+    } finally {
+      clearTimeout(timer)
     }
   }
 }
