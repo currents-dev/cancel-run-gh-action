@@ -38,7 +38,8 @@ const CURRENTS_ENV = [
   'CURRENTS_CI_BUILD_ID',
   'CURRENTS_RUN_ID',
   'ACTIONS_ID_TOKEN_REQUEST_URL',
-  'ACTIONS_ID_TOKEN_REQUEST_TOKEN'
+  'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+  'CURRENTS_OIDC_AUDIENCE'
 ]
 
 beforeEach(() => {
@@ -532,7 +533,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     await run()
 
     const [githubUrl, githubInit] = githubFetch.mock.calls[0]
-    expect(requestedAudience()).toBe(DIRECTOR_URL)
+    expect(requestedAudience()).toBe('currents:record-key')
     expect(githubUrl).toContain('api-version=2.0')
     expect(githubInit.method).toBe('GET')
     expect(githubInit.redirect).toBe('manual')
@@ -581,22 +582,32 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     expect(formRequest(0).form.get('project_id')).toBe('project-from-env')
   })
 
-  test('requests the token for the origin of director-url', async () => {
-    process.env['INPUT_DIRECTOR-URL'] = 'https://Currents.Example.com:443/cy/'
+  test('requests the token for currents:record-key whatever director-url is', async () => {
+    process.env['INPUT_DIRECTOR-URL'] = 'https://currents.example.com/cy'
     fetchMock.mockResolvedValue(reply(404, {}))
 
     await run()
 
-    expect(requestedAudience()).toBe('https://currents.example.com')
+    expect(requestedAudience()).toBe('currents:record-key')
   })
 
-  test('requests the token for https://cy.currents.dev by default', async () => {
-    delete process.env['INPUT_DIRECTOR-URL']
+  test('requests the token for the audience in CURRENTS_OIDC_AUDIENCE', async () => {
+    process.env['CURRENTS_OIDC_AUDIENCE'] = ' currents:record-key:staging '
     fetchMock.mockResolvedValue(reply(404, {}))
 
     await run()
 
-    expect(requestedAudience()).toBe('https://cy.currents.dev')
+    expect(requestedAudience()).toBe('currents:record-key:staging')
+  })
+
+  test('prefers the oidc-audience input to CURRENTS_OIDC_AUDIENCE', async () => {
+    process.env['CURRENTS_OIDC_AUDIENCE'] = 'currents:record-key:staging'
+    process.env['INPUT_OIDC-AUDIENCE'] = 'currents:record-key:acme'
+    fetchMock.mockResolvedValue(reply(404, {}))
+
+    await run()
+
+    expect(requestedAudience()).toBe('currents:record-key:acme')
   })
 
   test('uses a record key when one is provided', async () => {

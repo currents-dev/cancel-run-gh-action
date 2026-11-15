@@ -29,7 +29,7 @@ The action accepts either credential.
 
 **`api-token`** — a Currents [API key](https://docs.currents.dev/resources/api/api-keys). It can also identify the run by the GitHub run id and attempt, which the reporter stores on the run, so nothing else is required. Kept for workflows that already use it.
 
-**GitHub Actions OIDC** — with neither `record-key` (or `CURRENTS_RECORD_KEY`) nor `api-token`, a job with `permissions: id-token: write` gets a short-lived record key from its OIDC token, like the Currents reporters do. The token's audience is the origin of `director-url`, `https://cy.currents.dev` by default. The action sends the token and `project-id` to `director-url` and gets back a short-lived record key, cancels with it, then revokes it. It needs `project-id` and `ci-build-id` or `run-id`, as with `record-key`. Pull requests from forks get no OIDC token.
+**GitHub Actions OIDC** — with neither `record-key` (or `CURRENTS_RECORD_KEY`) nor `api-token`, a job with `permissions: id-token: write` gets a short-lived record key from its OIDC token, like the Currents reporters do. The token's audience is `currents:record-key`, which Currents cloud accepts. For staging or self-hosted Currents, set `CURRENTS_OIDC_AUDIENCE` (or the `oidc-audience` input) to the audience your server is configured with. The action sends the token and `project-id` to `director-url` and gets back a short-lived record key, cancels with it, then revokes it. It needs `project-id` and `ci-build-id` or `run-id`, as with `record-key`. Pull requests from forks get no OIDC token.
 
 If more than one is available, `record-key` is used first, then `api-token`, then OIDC.
 
@@ -45,19 +45,20 @@ With `record-key`, the run is identified by either `ci-build-id` or `run-id`. `r
 
 ## Inputs
 
-Every input is optional. `record-key`, `project-id`, `ci-build-id` and `run-id` fall back to `CURRENTS_RECORD_KEY`, `CURRENTS_PROJECT_ID`, `CURRENTS_CI_BUILD_ID` and `CURRENTS_RUN_ID`.
+Every input is optional. `record-key`, `project-id`, `ci-build-id`, `run-id` and `oidc-audience` fall back to `CURRENTS_RECORD_KEY`, `CURRENTS_PROJECT_ID`, `CURRENTS_CI_BUILD_ID`, `CURRENTS_RUN_ID` and `CURRENTS_OIDC_AUDIENCE`.
 
-| Input                | Description                                                                                                                              |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `record-key`         | Currents record key. The env fallback is skipped when `api-token` is set. Without it, OIDC is used when the job has `id-token: write`.   |
-| `api-token`          | Currents API key. Used when no record key is available.                                                                                  |
-| `project-id`         | Currents project ID. Required with `record-key`, optional with `api-token`.                                                              |
-| `ci-build-id`        | CI build ID the run was recorded with.                                                                                                   |
-| `run-id`             | Currents run ID. An alternative to `ci-build-id`, and takes precedence. Only used with `record-key`.                                     |
-| `github-run-id`      | Only used with `api-token`. Defaults to the current workflow run.                                                                        |
-| `github-run-attempt` | Only used with `api-token`. Defaults to the current workflow run attempt.                                                                |
-| `director-url`       | Currents reporting URL, used with `record-key` and OIDC. Defaults to `https://cy.currents.dev`. Its origin is the OIDC token's audience. |
-| `api-url`            | Currents REST API URL, used with `api-token`. Defaults to `https://api.currents.dev/v1`.                                                 |
+| Input                | Description                                                                                                                            |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `record-key`         | Currents record key. The env fallback is skipped when `api-token` is set. Without it, OIDC is used when the job has `id-token: write`. |
+| `api-token`          | Currents API key. Used when no record key is available.                                                                                |
+| `project-id`         | Currents project ID. Required with `record-key`, optional with `api-token`.                                                            |
+| `ci-build-id`        | CI build ID the run was recorded with.                                                                                                 |
+| `run-id`             | Currents run ID. An alternative to `ci-build-id`, and takes precedence. Only used with `record-key`.                                   |
+| `github-run-id`      | Only used with `api-token`. Defaults to the current workflow run.                                                                      |
+| `github-run-attempt` | Only used with `api-token`. Defaults to the current workflow run attempt.                                                              |
+| `director-url`       | Currents reporting URL, used with `record-key` and OIDC. Defaults to `https://cy.currents.dev`.                                        |
+| `oidc-audience`      | Audience of the GitHub Actions OIDC token. Defaults to `CURRENTS_OIDC_AUDIENCE`, then `currents:record-key`.                           |
+| `api-url`            | Currents REST API URL, used with `api-token`. Defaults to `https://api.currents.dev/v1`.                                               |
 
 With `record-key`, `project-id` and one of `ci-build-id` / `run-id` must be available. With `api-token`, nothing else is required.
 

@@ -32157,13 +32157,19 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.DEFAULT_DIRECTOR_URL = exports.DEFAULT_API_URL = void 0;
+exports.DEFAULT_OIDC_AUDIENCE = exports.DEFAULT_DIRECTOR_URL = exports.DEFAULT_API_URL = void 0;
 exports.readCredentials = readCredentials;
 exports.readApiUrl = readApiUrl;
+exports.readOidcAudience = readOidcAudience;
 exports.readDirectorUrl = readDirectorUrl;
 const core = __importStar(__nccwpck_require__(7484));
 exports.DEFAULT_API_URL = 'https://api.currents.dev/v1';
 exports.DEFAULT_DIRECTOR_URL = 'https://cy.currents.dev';
+/**
+ * The audience Currents cloud accepts, the same default as the Currents
+ * reporters. Staging and self-hosted Currents use their own value.
+ */
+exports.DEFAULT_OIDC_AUDIENCE = 'currents:record-key';
 function input(name, fallback) {
     return core.getInput(name, { trimWhitespace: true }) || fallback || '';
 }
@@ -32229,6 +32235,9 @@ function readCredentials() {
 function readApiUrl() {
     return input('api-url', exports.DEFAULT_API_URL).replace(/\/+$/, '');
 }
+function readOidcAudience() {
+    return input('oidc-audience', process.env.CURRENTS_OIDC_AUDIENCE?.trim() || exports.DEFAULT_OIDC_AUDIENCE);
+}
 function readDirectorUrl() {
     return input('director-url', exports.DEFAULT_DIRECTOR_URL).replace(/\/+$/, '');
 }
@@ -32288,7 +32297,11 @@ async function run() {
             const directorUrl = (0, inputs_1.readDirectorUrl)();
             const recordKey = credentials.kind === 'record-key'
                 ? credentials.recordKey
-                : await (0, oidc_1.getRecordKeyFromOidc)(directorUrl, credentials.projectId);
+                : await (0, oidc_1.getRecordKeyFromOidc)({
+                    directorUrl,
+                    projectId: credentials.projectId,
+                    audience: (0, inputs_1.readOidcAudience)()
+                });
             core.info('Cancelling the run with a record key');
             core.info(`Project id: ${credentials.projectId}`);
             core.info(credentials.runId
@@ -32394,7 +32407,6 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getOidcAudience = getOidcAudience;
 exports.getRecordKeyFromOidc = getRecordKeyFromOidc;
 exports.revokeRecordKey = revokeRecordKey;
 const core = __importStar(__nccwpck_require__(7484));
@@ -32403,18 +32415,6 @@ const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
 const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:jwt';
 const TOKEN_NAME = 'GitHub Actions OIDC token';
 const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' };
-/**
- * The origin of the director URL: a token minted for one Currents deployment is
- * refused by another. The Currents reporters derive it the same way.
- */
-function getOidcAudience(directorUrl) {
-    try {
-        return new URL(directorUrl).origin;
-    }
-    catch {
-        throw new Error(`"${directorUrl}" is not a valid URL`);
-    }
-}
 /** `error_description` of the OAuth error, then `error`, then the response. */
 function describeOAuthError(response) {
     const body = response.body ?? {};
@@ -32467,8 +32467,7 @@ async function getGitHubOidcToken(audience) {
  * trust policies it checks the token against, and refuses an exchange without
  * it.
  */
-async function getRecordKeyFromOidc(directorUrl, projectId) {
-    const audience = getOidcAudience(directorUrl);
+async function getRecordKeyFromOidc({ directorUrl, projectId, audience }) {
     let oidcToken;
     try {
         oidcToken = await getGitHubOidcToken(audience);

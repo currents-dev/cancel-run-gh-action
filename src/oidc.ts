@@ -7,18 +7,6 @@ const TOKEN_NAME = 'GitHub Actions OIDC token'
 
 const FORM_HEADERS = {'Content-Type': 'application/x-www-form-urlencoded'}
 
-/**
- * The origin of the director URL: a token minted for one Currents deployment is
- * refused by another. The Currents reporters derive it the same way.
- */
-export function getOidcAudience(directorUrl: string): string {
-  try {
-    return new URL(directorUrl).origin
-  } catch {
-    throw new Error(`"${directorUrl}" is not a valid URL`)
-  }
-}
-
 /** `error_description` of the OAuth error, then `error`, then the response. */
 function describeOAuthError(response: HttpResponse): string {
   const body = response.body ?? {}
@@ -86,11 +74,15 @@ async function getGitHubOidcToken(audience: string): Promise<string> {
  * trust policies it checks the token against, and refuses an exchange without
  * it.
  */
-export async function getRecordKeyFromOidc(
-  directorUrl: string,
+export async function getRecordKeyFromOidc({
+  directorUrl,
+  projectId,
+  audience
+}: {
+  directorUrl: string
   projectId: string
-): Promise<string> {
-  const audience = getOidcAudience(directorUrl)
+  audience: string
+}): Promise<string> {
   let oidcToken: string
 
   try {

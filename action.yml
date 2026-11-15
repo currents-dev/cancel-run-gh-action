@@ -23,9 +23,12 @@ inputs:
     description: 'GitHub run attempt. Defaults to the current workflow run. Only used with api-token.'
     required: false
   director-url:
-    description: 'Currents reporting URL, used with record-key and GitHub Actions OIDC. Its origin is the audience of the OIDC token.'
+    description: 'Currents reporting URL, used with record-key and GitHub Actions OIDC.'
     required: false
     default: 'https://cy.currents.dev'
+  oidc-audience:
+    description: 'Audience of the GitHub Actions OIDC token. Defaults to CURRENTS_OIDC_AUDIENCE, then currents:record-key, which Currents cloud accepts. Staging and self-hosted Currents set their server''s value.'
+    required: false
   api-url:
     description: 'Currents REST API URL, used with api-token.'
     required: false

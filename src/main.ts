@@ -1,6 +1,11 @@
 import * as core from '@actions/core'
 import {CancelResult, cancelWithApiToken, cancelWithRecordKey} from './api'
-import {readApiUrl, readCredentials, readDirectorUrl} from './inputs'
+import {
+  readApiUrl,
+  readCredentials,
+  readDirectorUrl,
+  readOidcAudience
+} from './inputs'
 import {getRecordKeyFromOidc, revokeRecordKey} from './oidc'
 
 export async function run(): Promise<void> {
@@ -13,7 +18,11 @@ export async function run(): Promise<void> {
       const recordKey =
         credentials.kind === 'record-key'
           ? credentials.recordKey
-          : await getRecordKeyFromOidc(directorUrl, credentials.projectId)
+          : await getRecordKeyFromOidc({
+              directorUrl,
+              projectId: credentials.projectId,
+              audience: readOidcAudience()
+            })
 
       core.info('Cancelling the run with a record key')
       core.info(`Project id: ${credentials.projectId}`)

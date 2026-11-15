@@ -2,6 +2,11 @@ import * as core from '@actions/core'
 
 export const DEFAULT_API_URL = 'https://api.currents.dev/v1'
 export const DEFAULT_DIRECTOR_URL = 'https://cy.currents.dev'
+/**
+ * The audience Currents cloud accepts, the same default as the Currents
+ * reporters. Staging and self-hosted Currents use their own value.
+ */
+export const DEFAULT_OIDC_AUDIENCE = 'currents:record-key'
 
 /**
  * The record key path identifies the run within a project, by the run id or by
@@ -124,6 +129,13 @@ export function readCredentials(): Credentials {
 
 export function readApiUrl(): string {
   return input('api-url', DEFAULT_API_URL).replace(/\/+$/, '')
+}
+
+export function readOidcAudience(): string {
+  return input(
+    'oidc-audience',
+    process.env.CURRENTS_OIDC_AUDIENCE?.trim() || DEFAULT_OIDC_AUDIENCE
+  )
 }
 
 export function readDirectorUrl(): string {
