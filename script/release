@@ -78,6 +78,10 @@ fi
 echo -e "Latest release: ${BLUE}${latest_tag:-none}${OFF}"
 echo -e "New release:    ${BLUE}${new_tag}${OFF} at $(git log -1 --format='%h %s')"
 
+# What the remote has right now, so the push can refuse to clobber a release
+# someone else lands while this one sits at the prompt. Empty when absent.
+major_remote=$(git ls-remote "$remote" "refs/tags/$major_tag" | cut -f1)
+
 if git rev-parse -q --verify "refs/tags/$major_tag" >/dev/null; then
 	major_exists='yes'
 	echo -e "                moves ${BLUE}${major_tag}${OFF} from $(git log -1 --format='%h %s' "$major_tag")"
@@ -97,9 +101,13 @@ git tag --annotate --force --message "Sync $major_tag with $new_tag" "$major_tag
 
 # One atomic push: a rejected major tag (branch protection, a lost race) must
 # not leave the release tag published with @vN still on the old code.
-git push --atomic "$remote" \
+#
+# The major tag deliberately carries no '+'. --force-with-lease does the
+# forcing, and a '+' in the refspec forces unconditionally and silently
+# bypasses the lease, which would make the guard below do nothing.
+git push --atomic --force-with-lease="refs/tags/$major_tag:$major_remote" "$remote" \
 	"refs/tags/$new_tag:refs/tags/$new_tag" \
-	"+refs/tags/$major_tag:refs/tags/$major_tag"
+	"refs/tags/$major_tag:refs/tags/$major_tag"
 
 echo -e "Tagged: ${GREEN}${new_tag}${OFF}"
 if [ "$major_exists" = 'yes' ]; then
