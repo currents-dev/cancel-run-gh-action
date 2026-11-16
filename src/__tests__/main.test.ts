@@ -539,6 +539,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
 
   test('exchanges the OIDC token and cancels with the record key it gets', async () => {
     const setFailed = jest.spyOn(core, 'setFailed')
+    const warning = jest.spyOn(core, 'warning')
     const setSecret = jest.spyOn(core, 'setSecret')
     const info = jest.spyOn(core, 'info')
     fetchMock
@@ -585,8 +586,53 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
       )
     )
     expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
+    expect(warning).not.toHaveBeenCalled()
     expect(setFailed).not.toHaveBeenCalled()
   })
+
+  test.each([
+    [
+      'an OAuth error that echoes the key',
+      () =>
+        reply(400, {
+          error: 'invalid_request',
+          error_description: `Unknown token ${OIDC_RECORD_KEY}`
+        }),
+      'HTTP 400'
+    ],
+    [
+      'a body whose 200-character cut splits the key',
+      () => reply(400, `${'x'.repeat(195)}${OIDC_RECORD_KEY}`),
+      'HTTP 400'
+    ],
+    [
+      'a retryable status whose message echoes the key',
+      () => reply(503, {message: `Unknown token ${OIDC_RECORD_KEY}`}),
+      'the request failed or timed out'
+    ]
+  ])(
+    'warns without server text when the revoke gets %s, and the cancel still succeeds',
+    async (_name, revokeReply, failure) => {
+      const setFailed = jest.spyOn(core, 'setFailed')
+      const warning = jest.spyOn(core, 'warning')
+      const info = jest.spyOn(core, 'info')
+      fetchMock
+        .mockResolvedValueOnce(exchanged())
+        .mockResolvedValueOnce(
+          reply(200, {status: 'OK', data: {runId: 'run-1'}})
+        )
+        .mockResolvedValueOnce(revokeReply())
+
+      await run()
+
+      expect(warning).toHaveBeenCalledTimes(1)
+      expect(warning).toHaveBeenCalledWith(
+        `Could not revoke the record key from OIDC (${failure}). It expires on its own.`
+      )
+      expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
+      expect(setFailed).not.toHaveBeenCalled()
+    }
+  )
 
   describe('a server that does not respond', () => {
     beforeEach(() => {
@@ -599,6 +645,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
 
     test('gives up on the revoke after 5 seconds, and the cancel still succeeds', async () => {
       const setFailed = jest.spyOn(core, 'setFailed')
+      const warning = jest.spyOn(core, 'warning')
       const info = jest.spyOn(core, 'info')
       fetchMock
         .mockResolvedValueOnce(exchanged())
@@ -614,6 +661,9 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
       await done
 
       expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining('Could not revoke the record key from OIDC')
+      )
       expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
       expect(setFailed).not.toHaveBeenCalled()
     })

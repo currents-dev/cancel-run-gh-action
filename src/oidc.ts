@@ -143,12 +143,18 @@ export async function getRecordKeyFromOidc({
 
 /**
  * The key is only needed for the cancel request. One attempt: on failure the
- * key still expires on its own, so it only gets a debug line.
+ * key still expires on its own, so the step only gets a warning.
+ *
+ * The warning leaves out server text. A server that echoes the token in a long
+ * error body gets it cut at 200 characters, and a cut key no longer matches the
+ * log mask from core.setSecret.
  */
 export async function revokeRecordKey(
   directorUrl: string,
   recordKey: string
 ): Promise<void> {
+  let failure: string
+
   try {
     const response = await request(
       `${directorUrl}/oidc/revoke`,
@@ -163,16 +169,16 @@ export async function revokeRecordKey(
       {retries: 0, timeoutMs: REVOKE_TIMEOUT_MS}
     )
 
-    core.debug(
-      response.status === 200
-        ? 'Revoked the record key from OIDC'
-        : `Could not revoke the record key from OIDC: ${describeOAuthError(response)}`
-    )
-  } catch (error) {
-    core.debug(
-      `Could not revoke the record key from OIDC: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    )
+    if (response.status === 200) {
+      core.debug('Revoked the record key from OIDC')
+      return
+    }
+    failure = `HTTP ${response.status}`
+  } catch {
+    failure = 'the request failed or timed out'
   }
+
+  core.warning(
+    `Could not revoke the record key from OIDC (${failure}). It expires on its own.`
+  )
 }
