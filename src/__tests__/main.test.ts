@@ -539,6 +539,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
 
   test('exchanges the OIDC token and cancels with the record key it gets', async () => {
     const setFailed = jest.spyOn(core, 'setFailed')
+    const warning = jest.spyOn(core, 'warning')
     const setSecret = jest.spyOn(core, 'setSecret')
     const info = jest.spyOn(core, 'info')
     fetchMock
@@ -585,6 +586,32 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
       )
     )
     expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
+    expect(warning).not.toHaveBeenCalled()
+    expect(setFailed).not.toHaveBeenCalled()
+  })
+
+  test('warns when the revoke fails, without the key, and the cancel still succeeds', async () => {
+    const setFailed = jest.spyOn(core, 'setFailed')
+    const warning = jest.spyOn(core, 'warning')
+    const info = jest.spyOn(core, 'info')
+    fetchMock
+      .mockResolvedValueOnce(exchanged())
+      .mockResolvedValueOnce(reply(200, {status: 'OK', data: {runId: 'run-1'}}))
+      .mockResolvedValueOnce(
+        reply(400, {
+          error: 'invalid_request',
+          error_description: 'The token is missing'
+        })
+      )
+
+    await run()
+
+    expect(warning).toHaveBeenCalledTimes(1)
+    expect(warning).toHaveBeenCalledWith(
+      'Could not revoke the record key from OIDC, it expires on its own: The token is missing'
+    )
+    expect(warning.mock.calls[0][0]).not.toContain(OIDC_RECORD_KEY)
+    expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
     expect(setFailed).not.toHaveBeenCalled()
   })
 
@@ -599,6 +626,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
 
     test('gives up on the revoke after 5 seconds, and the cancel still succeeds', async () => {
       const setFailed = jest.spyOn(core, 'setFailed')
+      const warning = jest.spyOn(core, 'warning')
       const info = jest.spyOn(core, 'info')
       fetchMock
         .mockResolvedValueOnce(exchanged())
@@ -614,6 +642,9 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
       await done
 
       expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining('Could not revoke the record key from OIDC')
+      )
       expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
       expect(setFailed).not.toHaveBeenCalled()
     })
