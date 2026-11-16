@@ -590,30 +590,49 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     expect(setFailed).not.toHaveBeenCalled()
   })
 
-  test('warns when the revoke fails, without the key, and the cancel still succeeds', async () => {
-    const setFailed = jest.spyOn(core, 'setFailed')
-    const warning = jest.spyOn(core, 'warning')
-    const info = jest.spyOn(core, 'info')
-    fetchMock
-      .mockResolvedValueOnce(exchanged())
-      .mockResolvedValueOnce(reply(200, {status: 'OK', data: {runId: 'run-1'}}))
-      .mockResolvedValueOnce(
+  test.each([
+    [
+      'an OAuth error that echoes the key',
+      () =>
         reply(400, {
           error: 'invalid_request',
-          error_description: 'The token is missing'
-        })
+          error_description: `Unknown token ${OIDC_RECORD_KEY}`
+        }),
+      'HTTP 400'
+    ],
+    [
+      'a body whose 200-character cut splits the key',
+      () => reply(400, `${'x'.repeat(195)}${OIDC_RECORD_KEY}`),
+      'HTTP 400'
+    ],
+    [
+      'a retryable status whose message echoes the key',
+      () => reply(503, {message: `Unknown token ${OIDC_RECORD_KEY}`}),
+      'the request failed or timed out'
+    ]
+  ])(
+    'warns without server text when the revoke gets %s, and the cancel still succeeds',
+    async (_name, revokeReply, failure) => {
+      const setFailed = jest.spyOn(core, 'setFailed')
+      const warning = jest.spyOn(core, 'warning')
+      const info = jest.spyOn(core, 'info')
+      fetchMock
+        .mockResolvedValueOnce(exchanged())
+        .mockResolvedValueOnce(
+          reply(200, {status: 'OK', data: {runId: 'run-1'}})
+        )
+        .mockResolvedValueOnce(revokeReply())
+
+      await run()
+
+      expect(warning).toHaveBeenCalledTimes(1)
+      expect(warning).toHaveBeenCalledWith(
+        `Could not revoke the record key from OIDC (${failure}). It expires on its own.`
       )
-
-    await run()
-
-    expect(warning).toHaveBeenCalledTimes(1)
-    expect(warning).toHaveBeenCalledWith(
-      'Could not revoke the record key from OIDC, it expires on its own: The token is missing'
-    )
-    expect(warning.mock.calls[0][0]).not.toContain(OIDC_RECORD_KEY)
-    expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
-    expect(setFailed).not.toHaveBeenCalled()
-  })
+      expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
+      expect(setFailed).not.toHaveBeenCalled()
+    }
+  )
 
   describe('a server that does not respond', () => {
     beforeEach(() => {
