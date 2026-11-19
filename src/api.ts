@@ -140,7 +140,9 @@ export async function request(
         redirect: 'manual',
         signal: deadline.signal
       })
-      const text = await response.text()
+      const responseText = await response.text()
+      const text =
+        response.status === 200 ? responseText : redact(responseText, secrets)
       const result = {status: response.status, body: parseBody(text), text}
 
       if (response.status >= 300 && response.status < 400) {
@@ -161,7 +163,7 @@ export async function request(
       return result
     } catch (error) {
       if (error instanceof FatalError) {
-        throw error
+        throw new Error(redact(error.message, secrets))
       }
 
       // Anything fetch itself throws is a transport failure - the URL was

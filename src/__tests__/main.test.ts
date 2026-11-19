@@ -55,6 +55,7 @@ const CURRENTS_ENV = [
   'CURRENTS_RUN_ID',
   'ACTIONS_ID_TOKEN_REQUEST_URL',
   'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+  'CURRENTS_OIDC_POLICY_ID',
   'CURRENTS_OIDC_AUDIENCE'
 ]
 
@@ -482,6 +483,7 @@ describe('the destination of a credential', () => {
 })
 
 describe('cancelling with a record key from GitHub Actions OIDC', () => {
+  const POLICY_ID = '0123456789abcdef01234567'
   const OIDC_TOKEN = 'header.oidc-token-payload.signature'
   const OIDC_RECORD_KEY = 'crnts_ci_exchanged-key'
 
@@ -523,6 +525,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     process.env['ACTIONS_ID_TOKEN_REQUEST_URL'] = REQUEST_URL
     process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = REQUEST_TOKEN
     process.env['INPUT_PROJECT-ID'] = PROJECT_ID
+    process.env['INPUT_OIDC-POLICY-ID'] = POLICY_ID
     process.env['INPUT_CI-BUILD-ID'] = CI_BUILD_ID
     process.env['INPUT_DIRECTOR-URL'] = DIRECTOR_URL
     githubFetch.mockReset()
@@ -564,7 +567,7 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
       grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
       subject_token: OIDC_TOKEN,
       subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
-      project_id: PROJECT_ID
+      policy_id: POLICY_ID
     })
 
     const [cancelUrl, cancelInit] = fetchMock.mock.calls[1]
@@ -707,14 +710,59 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     })
   })
 
-  test('sends CURRENTS_PROJECT_ID as the project of the exchange', async () => {
-    delete process.env['INPUT_PROJECT-ID']
-    process.env['CURRENTS_PROJECT_ID'] = 'project-from-env'
-    fetchMock.mockResolvedValue(reply(404, {}))
-
+  test('uses the environment policy ID without a project selector', async () => {
+    delete process.env['INPUT_OIDC-POLICY-ID']
+    process.env['CURRENTS_OIDC_POLICY_ID'] = POLICY_ID
+    fetchMock.mockResolvedValue(reply(400, {}))
     await run()
+    expect(formRequest(0).form.get('policy_id')).toBe(POLICY_ID)
+    expect(formRequest(0).form.has('project_id')).toBe(false)
+  })
 
-    expect(formRequest(0).form.get('project_id')).toBe('project-from-env')
+  test('prefers the policy input to the environment', async () => {
+    process.env['CURRENTS_OIDC_POLICY_ID'] = 'another-policy'
+    fetchMock.mockResolvedValue(reply(400, {}))
+    await run()
+    expect(formRequest(0).form.get('policy_id')).toBe(POLICY_ID)
+  })
+
+  test('requires a policy ID before requesting a token', async () => {
+    delete process.env['INPUT_OIDC-POLICY-ID']
+    await run()
+    expect(core.setFailed).toHaveBeenCalledWith(
+      expect.stringContaining('CURRENTS_OIDC_POLICY_ID')
+    )
+    expect(githubFetch).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test.each([400, 503])(
+    'redacts the policy ID in HTTP %s errors and retries',
+    async status => {
+      const info = jest.spyOn(core, 'info')
+      fetchMock.mockResolvedValue(
+        reply(status, {
+          error_description: `Unknown policy ${POLICY_ID}`,
+          error: `Unknown policy ${POLICY_ID}`
+        })
+      )
+      await run()
+      expect(core.setFailed).toHaveBeenCalledWith(
+        expect.stringContaining('***')
+      )
+      expect(
+        JSON.stringify(jest.mocked(core.setFailed).mock.calls)
+      ).not.toContain(POLICY_ID)
+      expect(JSON.stringify(info.mock.calls)).not.toContain(POLICY_ID)
+    }
+  )
+
+  test('redacts a policy ID before an error body is truncated', async () => {
+    fetchMock.mockResolvedValue(reply(400, `${'x'.repeat(195)}${POLICY_ID}`))
+    await run()
+    expect(
+      JSON.stringify(jest.mocked(core.setFailed).mock.calls)
+    ).not.toContain(POLICY_ID.slice(0, 5))
   })
 
   test('requests the token for currents:record-key whatever director-url is', async () => {
@@ -906,7 +954,8 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
         (line.includes(REQUEST_URL_SECRET) || line.includes(REQUEST_TOKEN))
     )
     expect(firstUse).toBe(-1)
-    expect(output.slice(0, 2)).toEqual([
+    expect(output.slice(0, 3)).toEqual([
+      `::add-mask::${POLICY_ID}${EOL}`,
       `::add-mask::${REQUEST_URL}${EOL}`,
       `::add-mask::${REQUEST_TOKEN}${EOL}`
     ])

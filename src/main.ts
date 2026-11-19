@@ -20,7 +20,7 @@ export async function run(): Promise<void> {
           ? credentials.recordKey
           : await getRecordKeyFromOidc({
               directorUrl,
-              projectId: credentials.projectId,
+              policyId: credentials.policyId,
               audience: readOidcAudience()
             })
 

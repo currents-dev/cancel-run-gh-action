@@ -25,7 +25,7 @@ type RunIdentifiers = {
  */
 export type Credentials =
   | ({kind: 'record-key'; recordKey: string} & RunIdentifiers)
-  | ({kind: 'oidc'} & RunIdentifiers)
+  | ({kind: 'oidc'; policyId: string} & RunIdentifiers)
   | {
       kind: 'api-token'
       apiToken: string
@@ -94,7 +94,21 @@ export function readCredentials(): Credentials {
 
   if (!apiToken) {
     if (hasGitHubOidc()) {
-      return {kind: 'oidc', ...readRunIdentifiers('GitHub Actions OIDC')}
+      const policyId = input(
+        'oidc-policy-id',
+        process.env.CURRENTS_OIDC_POLICY_ID?.trim()
+      )
+      if (!policyId) {
+        throw new Error(
+          'GitHub Actions OIDC requires oidc-policy-id. Pass it to this step, or export CURRENTS_OIDC_POLICY_ID on the job.'
+        )
+      }
+      core.setSecret(policyId)
+      return {
+        kind: 'oidc',
+        policyId,
+        ...readRunIdentifiers('GitHub Actions OIDC')
+      }
     }
 
     throw new Error(

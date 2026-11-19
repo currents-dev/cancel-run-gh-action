@@ -32040,7 +32040,8 @@ async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUES
                 redirect: 'manual',
                 signal: deadline.signal
             });
-            const text = await response.text();
+            const responseText = await response.text();
+            const text = response.status === 200 ? responseText : redact(responseText, secrets);
             const result = { status: response.status, body: parseBody(text), text };
             if (response.status >= 300 && response.status < 400) {
                 const location = label
@@ -32055,7 +32056,7 @@ async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUES
         }
         catch (error) {
             if (error instanceof FatalError) {
-                throw error;
+                throw new Error(redact(error.message, secrets));
             }
             // Anything fetch itself throws is a transport failure - the URL was
             // already validated above.
@@ -32234,7 +32235,16 @@ function readCredentials() {
     }
     if (!apiToken) {
         if (hasGitHubOidc()) {
-            return { kind: 'oidc', ...readRunIdentifiers('GitHub Actions OIDC') };
+            const policyId = input('oidc-policy-id', process.env.CURRENTS_OIDC_POLICY_ID?.trim());
+            if (!policyId) {
+                throw new Error('GitHub Actions OIDC requires oidc-policy-id. Pass it to this step, or export CURRENTS_OIDC_POLICY_ID on the job.');
+            }
+            core.setSecret(policyId);
+            return {
+                kind: 'oidc',
+                policyId,
+                ...readRunIdentifiers('GitHub Actions OIDC')
+            };
         }
         throw new Error('Provide record-key, or api-token to cancel with a Currents API key. Without a stored record key, add `permissions: id-token: write` to the job to get a record key from its GitHub Actions OIDC token.');
     }
@@ -32321,7 +32331,7 @@ async function run() {
                 ? credentials.recordKey
                 : await (0, oidc_1.getRecordKeyFromOidc)({
                     directorUrl,
-                    projectId: credentials.projectId,
+                    policyId: credentials.policyId,
                     audience: (0, inputs_1.readOidcAudience)()
                 });
             core.info('Cancelling the run with a record key');
@@ -32491,11 +32501,9 @@ async function getGitHubOidcToken(audience) {
 }
 /**
  * Exchanges the job's GitHub Actions OIDC token (RFC 8693) for a short-lived
- * record key. The server uses `project_id` to find the organization whose
- * trust policies it checks the token against, and refuses an exchange without
- * it.
+ * record key using the selected trust policy.
  */
-async function getRecordKeyFromOidc({ directorUrl, projectId, audience }) {
+async function getRecordKeyFromOidc({ directorUrl, policyId, audience }) {
     let oidcToken;
     try {
         oidcToken = await getGitHubOidcToken(audience);
@@ -32513,9 +32521,9 @@ async function getRecordKeyFromOidc({ directorUrl, projectId, audience }) {
                 grant_type: GRANT_TYPE,
                 subject_token: oidcToken,
                 subject_token_type: SUBJECT_TOKEN_TYPE,
-                project_id: projectId
+                policy_id: policyId
             }).toString()
-        });
+        }, { redactValues: [policyId] });
     }
     catch (error) {
         throw exchangeError(error instanceof Error ? error.message : String(error));
