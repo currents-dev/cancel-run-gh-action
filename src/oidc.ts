@@ -53,7 +53,11 @@ async function getGitHubOidcToken(audience: string): Promise<string> {
         Authorization: `Bearer ${requestToken}`
       }
     },
-    {label: 'The GitHub OIDC token request'}
+    {
+      label: 'The GitHub OIDC token request',
+      redactValues: [requestUrl, url.href, requestToken],
+      retryStatuses: new Set([429, 500, 502, 503, 504])
+    }
   )
 
   if (response.status !== 200) {

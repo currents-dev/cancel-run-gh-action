@@ -42,16 +42,26 @@ export function truncate(text: string, max = 200): string {
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
-function describe(response: HttpResponse): string {
+function redact(text: string, values: readonly string[]): string {
+  for (const value of values) {
+    if (value) text = text.replaceAll(value, '***')
+  }
+  return text
+}
+
+function describe(
+  response: HttpResponse,
+  redactValues: readonly string[] = []
+): string {
   const body = response.body ?? {}
   const message =
     typeof body.error === 'string'
       ? body.error
       : typeof body.message === 'string'
         ? body.message
-        : truncate(response.text) || 'no response body'
+        : truncate(redact(response.text, redactValues)) || 'no response body'
 
-  return `${message} (HTTP ${response.status})`
+  return `${redact(message, redactValues)} (HTTP ${response.status})`
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -95,10 +105,20 @@ export async function request(
   {
     retries = RETRIES,
     label,
-    timeoutMs = REQUEST_TIMEOUT_MS
-  }: {retries?: number; label?: string; timeoutMs?: number} = {}
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    retryStatuses = RETRIABLE_STATUS,
+    redactValues = []
+  }: {
+    retries?: number
+    label?: string
+    timeoutMs?: number
+    retryStatuses?: ReadonlySet<number>
+    redactValues?: readonly string[]
+  } = {}
 ): Promise<HttpResponse> {
   checkDestination(url, label ?? `"${url}"`)
+  // Replace a complete URL before a shorter value contained in it.
+  const secrets = [...redactValues].sort((a, b) => b.length - a.length)
 
   for (let attempt = 1; ; attempt++) {
     const deadline = new AbortController()
@@ -134,8 +154,8 @@ export async function request(
         )
       }
 
-      if (RETRIABLE_STATUS.has(response.status)) {
-        throw new RetriableError(describe(result))
+      if (retryStatuses.has(response.status)) {
+        throw new RetriableError(describe(result, secrets))
       }
 
       return result
@@ -146,7 +166,10 @@ export async function request(
 
       // Anything fetch itself throws is a transport failure - the URL was
       // already validated above.
-      const message = error instanceof Error ? error.message : String(error)
+      const message = redact(
+        error instanceof Error ? error.message : String(error),
+        secrets
+      )
 
       if (attempt > retries) {
         throw new Error(message)
