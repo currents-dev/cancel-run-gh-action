@@ -806,6 +806,48 @@ describe('cancelling with a record key from GitHub Actions OIDC', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  test.each([408, 425])('does not retry GitHub HTTP %s', async status => {
+    githubFetch.mockResolvedValue(reply(status, 'Request refused'))
+    const setFailed = jest.spyOn(core, 'setFailed')
+
+    await run()
+
+    expect(githubFetch).toHaveBeenCalledTimes(1)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(setFailed).toHaveBeenCalledWith(
+      `Could not get the GitHub Actions OIDC token: GitHub did not issue a token (HTTP ${status})`
+    )
+  })
+
+  test.each([
+    ['request token', REQUEST_TOKEN],
+    ['request URL', REQUEST_URL],
+    [
+      'request URL with audience',
+      `${REQUEST_URL}&audience=currents%3Arecord-key`
+    ]
+  ])(
+    'redacts the GitHub %s before truncating error text',
+    async (_name, secret) => {
+      const info = jest.spyOn(core, 'info').mockImplementation(() => undefined)
+      const setFailed = jest.spyOn(core, 'setFailed')
+      githubFetch.mockResolvedValue(reply(429, `${'x'.repeat(195)}${secret}`))
+
+      await run()
+
+      expect(githubFetch).toHaveBeenCalledTimes(4)
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(info).toHaveBeenCalledTimes(3)
+      for (const [message] of info.mock.calls) {
+        expect(message).toContain(`${'x'.repeat(195)}*** (HTTP 429)`)
+        expect(message).not.toContain(secret.slice(0, 5))
+      }
+      expect(setFailed).toHaveBeenCalledWith(
+        `Could not get the GitHub Actions OIDC token: ${'x'.repeat(195)}*** (HTTP 429)`
+      )
+    }
+  )
+
   test('fails when the response from GitHub has no token', async () => {
     githubFetch.mockResolvedValue(reply(200, {}))
     const setFailed = jest.spyOn(core, 'setFailed')

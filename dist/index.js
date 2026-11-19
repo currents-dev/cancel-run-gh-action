@@ -31978,14 +31978,21 @@ function parseBody(text) {
 function truncate(text, max = 200) {
     return text.length > max ? `${text.slice(0, max)}…` : text;
 }
-function describe(response) {
+function redact(text, values) {
+    for (const value of values) {
+        if (value)
+            text = text.replaceAll(value, '***');
+    }
+    return text;
+}
+function describe(response, redactValues = []) {
     const body = response.body ?? {};
     const message = typeof body.error === 'string'
         ? body.error
         : typeof body.message === 'string'
             ? body.message
-            : truncate(response.text) || 'no response body';
-    return `${message} (HTTP ${response.status})`;
+            : truncate(redact(response.text, redactValues)) || 'no response body';
+    return `${redact(message, redactValues)} (HTTP ${response.status})`;
 }
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 /**
@@ -32014,8 +32021,10 @@ function checkDestination(url, name) {
  * `label` names the request in messages instead of the URL and the Location of
  * a redirect, for a URL that holds a credential.
  */
-async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUEST_TIMEOUT_MS, retryStatuses = RETRIABLE_STATUS, redactValues = [] } = {}) {
     checkDestination(url, label ?? `"${url}"`);
+    // Replace a complete URL before a shorter value contained in it.
+    const secrets = [...redactValues].sort((a, b) => b.length - a.length);
     for (let attempt = 1;; attempt++) {
         const deadline = new AbortController();
         const timer = setTimeout(() => {
@@ -32039,8 +32048,8 @@ async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUES
                     : (response.headers.get('location') ?? 'an unnamed location');
                 throw new FatalError(`${label ?? url} redirected to ${location} (HTTP ${response.status}). Redirects are not followed, because the request carries a credential.`);
             }
-            if (RETRIABLE_STATUS.has(response.status)) {
-                throw new RetriableError(describe(result));
+            if (retryStatuses.has(response.status)) {
+                throw new RetriableError(describe(result, secrets));
             }
             return result;
         }
@@ -32050,7 +32059,7 @@ async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUES
             }
             // Anything fetch itself throws is a transport failure - the URL was
             // already validated above.
-            const message = error instanceof Error ? error.message : String(error);
+            const message = redact(error instanceof Error ? error.message : String(error), secrets);
             if (attempt > retries) {
                 throw new Error(message);
             }
@@ -32465,7 +32474,11 @@ async function getGitHubOidcToken(audience) {
             Accept: 'application/json',
             Authorization: `Bearer ${requestToken}`
         }
-    }, { label: 'The GitHub OIDC token request' });
+    }, {
+        label: 'The GitHub OIDC token request',
+        redactValues: [requestUrl, url.href, requestToken],
+        retryStatuses: new Set([429, 500, 502, 503, 504])
+    });
     if (response.status !== 200) {
         throw new Error(`GitHub did not issue a token (HTTP ${response.status})`);
     }
