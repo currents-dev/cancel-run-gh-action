@@ -22,7 +22,14 @@ export type HttpResponse = {
   text: string
 }
 
-class RetriableError extends Error {}
+class RetriableError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterMs?: number
+  ) {
+    super(message)
+  }
+}
 
 /** Thrown inside the retry loop for something retrying cannot change. */
 class FatalError extends Error {}
@@ -157,7 +164,13 @@ export async function request(
       }
 
       if (retryStatuses.has(response.status)) {
-        throw new RetriableError(describe(result, secrets))
+        const retryAfter = response.headers.get('retry-after')
+        const seconds = retryAfter?.trim() ? Number(retryAfter) : NaN
+        const retryAfterMs =
+          response.status === 429 && Number.isFinite(seconds) && seconds >= 0
+            ? Math.min(seconds, 60) * 1000
+            : undefined
+        throw new RetriableError(describe(result, secrets), retryAfterMs)
       }
 
       return result
@@ -177,15 +190,15 @@ export async function request(
         throw new Error(message)
       }
 
-      const delay = Math.min(
-        RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
-        RETRY_MAX_DELAY_MS
-      )
+      const delay =
+        (error instanceof RetriableError ? error.retryAfterMs : undefined) ??
+        Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS)
       core.info(
         `Attempt ${attempt} of ${
           retries + 1
         } failed: ${message}. Retrying in ${delay}ms.`
       )
+      clearTimeout(timer)
       await sleep(delay)
     } finally {
       clearTimeout(timer)

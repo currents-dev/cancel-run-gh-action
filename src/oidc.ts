@@ -5,6 +5,8 @@ const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange'
 const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:jwt'
 const TOKEN_NAME = 'GitHub Actions OIDC token'
 
+const EXCHANGE_RETRY_STATUSES = new Set([429, 500, 502, 503, 504])
+
 const FORM_HEADERS = {'Content-Type': 'application/x-www-form-urlencoded'}
 /** Revoke runs after the cancel and only saves the key's remaining minutes. */
 const REVOKE_TIMEOUT_MS = 5_000
@@ -119,7 +121,10 @@ export async function getRecordKeyFromOidc({
           policy_id: policyId
         }).toString()
       },
-      {redactValues: [policyId]}
+      {
+        redactValues: [policyId, oidcToken],
+        retryStatuses: EXCHANGE_RETRY_STATUSES
+      }
     )
   } catch (error) {
     throw exchangeError(error instanceof Error ? error.message : String(error))

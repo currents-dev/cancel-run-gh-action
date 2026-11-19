@@ -31960,6 +31960,11 @@ const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 /** Per attempt, for the response headers and the body together. */
 const REQUEST_TIMEOUT_MS = 30_000;
 class RetriableError extends Error {
+    retryAfterMs;
+    constructor(message, retryAfterMs) {
+        super(message);
+        this.retryAfterMs = retryAfterMs;
+    }
 }
 /** Thrown inside the retry loop for something retrying cannot change. */
 class FatalError extends Error {
@@ -32050,7 +32055,12 @@ async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUES
                 throw new FatalError(`${label ?? url} redirected to ${location} (HTTP ${response.status}). Redirects are not followed, because the request carries a credential.`);
             }
             if (retryStatuses.has(response.status)) {
-                throw new RetriableError(describe(result, secrets));
+                const retryAfter = response.headers.get('retry-after');
+                const seconds = retryAfter?.trim() ? Number(retryAfter) : NaN;
+                const retryAfterMs = response.status === 429 && Number.isFinite(seconds) && seconds >= 0
+                    ? Math.min(seconds, 60) * 1000
+                    : undefined;
+                throw new RetriableError(describe(result, secrets), retryAfterMs);
             }
             return result;
         }
@@ -32064,8 +32074,10 @@ async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUES
             if (attempt > retries) {
                 throw new Error(message);
             }
-            const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS);
+            const delay = (error instanceof RetriableError ? error.retryAfterMs : undefined) ??
+                Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS);
             core.info(`Attempt ${attempt} of ${retries + 1} failed: ${message}. Retrying in ${delay}ms.`);
+            clearTimeout(timer);
             await (0, sleep_1.sleep)(delay);
         }
         finally {
@@ -32446,6 +32458,7 @@ const api_1 = __nccwpck_require__(6879);
 const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
 const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:jwt';
 const TOKEN_NAME = 'GitHub Actions OIDC token';
+const EXCHANGE_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' };
 /** Revoke runs after the cancel and only saves the key's remaining minutes. */
 const REVOKE_TIMEOUT_MS = 5_000;
@@ -32523,7 +32536,10 @@ async function getRecordKeyFromOidc({ directorUrl, policyId, audience }) {
                 subject_token_type: SUBJECT_TOKEN_TYPE,
                 policy_id: policyId
             }).toString()
-        }, { redactValues: [policyId] });
+        }, {
+            redactValues: [policyId, oidcToken],
+            retryStatuses: EXCHANGE_RETRY_STATUSES
+        });
     }
     catch (error) {
         throw exchangeError(error instanceof Error ? error.message : String(error));
