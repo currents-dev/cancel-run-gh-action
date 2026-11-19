@@ -1,7 +1,9 @@
 import * as core from '@actions/core'
+import {parseRetryAfter} from '../api'
 import {getRecordKeyFromOidc} from '../oidc'
 
 const POLICY_ID = '0123456789abcdef01234567'
+const NOW = Date.parse('2026-11-19T12:00:00Z')
 const OIDC_TOKEN = 'header.oidc-token-payload.signature'
 const fetchMock = jest.fn()
 
@@ -26,7 +28,7 @@ const originalUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL
 const originalToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN
 
 beforeEach(() => {
-  jest.useFakeTimers()
+  jest.useFakeTimers({now: NOW})
   jest.spyOn(core, 'setSecret').mockImplementation(() => undefined)
   jest.spyOn(core, 'info').mockImplementation(() => undefined)
   fetchMock.mockReset()
@@ -51,7 +53,9 @@ afterEach(() => {
 
 test.each([
   ['2', 2000],
-  ['120', 60000],
+  ['60', 60000],
+  ['Thu, 19 Nov 2026 12:00:30 GMT', 30000],
+  ['Thu, 19 Nov 2026 11:59:00 GMT', 1000],
   [undefined, 1000],
   ['invalid', 1000],
   ['-1', 1000],
@@ -81,6 +85,39 @@ test.each([
     expect(jest.getTimerCount()).toBe(0)
   }
 )
+
+test.each(['61', 'Thu, 19 Nov 2026 12:02:00 GMT'])(
+  'stops when Retry-After %s asks for a wait over 60 seconds',
+  async header => {
+    fetchMock.mockResolvedValueOnce(
+      reply(429, {error: 'rate_limit_exceeded'}, {'Retry-After': header})
+    )
+
+    await expect(exchange()).rejects.toThrow(
+      /rate_limit_exceeded \(HTTP 429\)\. The server asked to wait \d+ seconds before retrying, more than the 60 seconds this action waits\./
+    )
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(core.info).not.toHaveBeenCalled()
+    expect(jest.getTimerCount()).toBe(0)
+  }
+)
+
+test.each([
+  ['30', 30000],
+  [' 30 ', 30000],
+  ['Thu, 19 Nov 2026 12:00:30 GMT', 30000],
+  ['Thursday, 19-Nov-26 12:00:30 GMT', 30000],
+  ['Thu Nov 19 12:00:30 2026', 30000],
+  ['Thu, 19 Nov 2026 11:00:00 GMT', 0],
+  ['1.5', undefined],
+  ['-1', undefined],
+  ['soon', undefined],
+  ['', undefined],
+  [null, undefined]
+])('parseRetryAfter(%p) is %p ms', (header, expected) => {
+  expect(parseRetryAfter(header, NOW)).toBe(expected)
+})
 
 test.each([undefined, '0'])(
   'succeeds after three 429 responses with Retry-After %s',
