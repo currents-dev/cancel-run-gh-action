@@ -55,7 +55,7 @@ test.each([
   [undefined, 1000],
   ['invalid', 1000],
   ['-1', 1000],
-  ['0', 0]
+  ['0', 1000]
 ])(
   'retries 429 after Retry-After %s with a %i ms wait',
   async (header, delay) => {
@@ -71,14 +71,10 @@ test.each([
 
     const result = exchange()
     await jest.advanceTimersByTimeAsync(0)
-    if (delay > 0) {
-      expect(fetchMock).toHaveBeenCalledTimes(2)
-      await jest.advanceTimersByTimeAsync(delay - 1)
-      expect(fetchMock).toHaveBeenCalledTimes(2)
-      await jest.advanceTimersByTimeAsync(1)
-    } else {
-      await jest.runAllTimersAsync()
-    }
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await jest.advanceTimersByTimeAsync(delay - 1)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await jest.advanceTimersByTimeAsync(1)
 
     await expect(result).resolves.toBe('record-key')
     expect(fetchMock).toHaveBeenCalledTimes(3)
@@ -86,18 +82,34 @@ test.each([
   }
 )
 
-test('succeeds after three 429 responses', async () => {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    fetchMock.mockResolvedValueOnce(reply(429, {error: 'rate_limit_exceeded'}))
+test.each([undefined, '0'])(
+  'succeeds after three 429 responses with Retry-After %s',
+  async header => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      fetchMock.mockResolvedValueOnce(
+        reply(
+          429,
+          {error: 'rate_limit_exceeded'},
+          header ? {'Retry-After': header} : {}
+        )
+      )
+    }
+    fetchMock.mockResolvedValueOnce(reply(200, {access_token: 'record-key'}))
+
+    const result = exchange()
+    await jest.advanceTimersByTimeAsync(0)
+    for (const [attempt, delay] of [1000, 2000, 4000].entries()) {
+      expect(fetchMock).toHaveBeenCalledTimes(attempt + 2)
+      await jest.advanceTimersByTimeAsync(delay - 1)
+      expect(fetchMock).toHaveBeenCalledTimes(attempt + 2)
+      await jest.advanceTimersByTimeAsync(1)
+    }
+
+    await expect(result).resolves.toBe('record-key')
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+    expect(jest.getTimerCount()).toBe(0)
   }
-  fetchMock.mockResolvedValueOnce(reply(200, {access_token: 'record-key'}))
-
-  const result = exchange()
-  await jest.advanceTimersByTimeAsync(7000)
-
-  await expect(result).resolves.toBe('record-key')
-  expect(fetchMock).toHaveBeenCalledTimes(5)
-})
+)
 
 test('fails clearly after three retries without logging the token or policy ID', async () => {
   fetchMock.mockImplementation(async () =>

@@ -32074,8 +32074,8 @@ async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUES
             if (attempt > retries) {
                 throw new Error(message);
             }
-            const delay = (error instanceof RetriableError ? error.retryAfterMs : undefined) ??
-                Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS);
+            const defaultDelay = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS);
+            const delay = Math.max(error instanceof RetriableError ? (error.retryAfterMs ?? 0) : 0, defaultDelay);
             core.info(`Attempt ${attempt} of ${retries + 1} failed: ${message}. Retrying in ${delay}ms.`);
             clearTimeout(timer);
             await (0, sleep_1.sleep)(delay);

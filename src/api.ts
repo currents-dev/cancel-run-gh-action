@@ -190,9 +190,14 @@ export async function request(
         throw new Error(message)
       }
 
-      const delay =
-        (error instanceof RetriableError ? error.retryAfterMs : undefined) ??
-        Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS)
+      const defaultDelay = Math.min(
+        RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
+        RETRY_MAX_DELAY_MS
+      )
+      const delay = Math.max(
+        error instanceof RetriableError ? (error.retryAfterMs ?? 0) : 0,
+        defaultDelay
+      )
       core.info(
         `Attempt ${attempt} of ${
           retries + 1
