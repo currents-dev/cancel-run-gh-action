@@ -26,8 +26,11 @@ inputs:
     description: 'Currents reporting URL, used with record-key and GitHub Actions OIDC.'
     required: false
     default: 'https://cy.currents.dev'
+  oidc-policy-id:
+    description: 'Currents trust policy ID. Required for OIDC. Defaults to CURRENTS_OIDC_POLICY_ID.'
+    required: false
   oidc-audience:
-    description: 'Audience of the GitHub Actions OIDC token. Defaults to CURRENTS_OIDC_AUDIENCE, then currents:record-key, which Currents cloud accepts. Staging and self-hosted Currents set their server''s value.'
+    description: "Audience of the GitHub Actions OIDC token. Defaults to CURRENTS_OIDC_AUDIENCE, then currents:record-key, which Currents cloud accepts. Staging and self-hosted Currents set their server's value."
     required: false
   api-url:
     description: 'Currents REST API URL, used with api-token.'

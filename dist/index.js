@@ -31946,6 +31946,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseRetryAfter = parseRetryAfter;
 exports.truncate = truncate;
 exports.request = request;
 exports.cancelWithRecordKey = cancelWithRecordKey;
@@ -31957,12 +31958,43 @@ const RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
 const RETRY_MAX_DELAY_MS = 8000;
 const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRY_AFTER_MAX_MS = 60_000;
 /** Per attempt, for the response headers and the body together. */
 const REQUEST_TIMEOUT_MS = 30_000;
 class RetriableError extends Error {
+    retryAfterMs;
+    constructor(message, retryAfterMs) {
+        super(message);
+        this.retryAfterMs = retryAfterMs;
+    }
 }
 /** Thrown inside the retry loop for something retrying cannot change. */
 class FatalError extends Error {
+}
+// The three HTTP-date formats of RFC 9110 section 5.6.7. Date.parse alone
+// would also accept values like "-1" or "1.5" as dates.
+const IMF_FIXDATE = /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+const RFC850_DATE = /^[A-Z][a-z]+, \d{2}-[A-Z][a-z]{2}-\d{2} \d{2}:\d{2}:\d{2} GMT$/;
+const ASCTIME_DATE = /^[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4}$/;
+/**
+ * Reads both forms of Retry-After from RFC 9110 section 10.2.3: a number of
+ * seconds, or an HTTP date. A date in the past means no wait.
+ */
+function parseRetryAfter(header, now = Date.now()) {
+    const value = header?.trim();
+    if (!value)
+        return undefined;
+    if (/^\d+$/.test(value))
+        return Number(value) * 1000;
+    let date = NaN;
+    if (IMF_FIXDATE.test(value) || RFC850_DATE.test(value)) {
+        date = Date.parse(value);
+    }
+    else if (ASCTIME_DATE.test(value)) {
+        // asctime has no zone, and Date.parse would read it as local time.
+        date = Date.parse(`${value} GMT`);
+    }
+    return Number.isNaN(date) ? undefined : Math.max(date - now, 0);
 }
 function parseBody(text) {
     try {
@@ -32040,7 +32072,8 @@ async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUES
                 redirect: 'manual',
                 signal: deadline.signal
             });
-            const text = await response.text();
+            const responseText = await response.text();
+            const text = response.status === 200 ? responseText : redact(responseText, secrets);
             const result = { status: response.status, body: parseBody(text), text };
             if (response.status >= 300 && response.status < 400) {
                 const location = label
@@ -32049,13 +32082,19 @@ async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUES
                 throw new FatalError(`${label ?? url} redirected to ${location} (HTTP ${response.status}). Redirects are not followed, because the request carries a credential.`);
             }
             if (retryStatuses.has(response.status)) {
-                throw new RetriableError(describe(result, secrets));
+                const retryAfterMs = response.status === 429
+                    ? parseRetryAfter(response.headers.get('retry-after'))
+                    : undefined;
+                if (retryAfterMs !== undefined && retryAfterMs > RETRY_AFTER_MAX_MS) {
+                    throw new FatalError(`${describe(result, secrets)}. The server asked to wait ${Math.ceil(retryAfterMs / 1000)} seconds before retrying, more than the ${RETRY_AFTER_MAX_MS / 1000} seconds this action waits.`);
+                }
+                throw new RetriableError(describe(result, secrets), retryAfterMs);
             }
             return result;
         }
         catch (error) {
             if (error instanceof FatalError) {
-                throw error;
+                throw new Error(redact(error.message, secrets));
             }
             // Anything fetch itself throws is a transport failure - the URL was
             // already validated above.
@@ -32063,8 +32102,10 @@ async function request(url, init, { retries = RETRIES, label, timeoutMs = REQUES
             if (attempt > retries) {
                 throw new Error(message);
             }
-            const delay = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS);
+            const defaultDelay = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS);
+            const delay = Math.max(error instanceof RetriableError ? (error.retryAfterMs ?? 0) : 0, defaultDelay);
             core.info(`Attempt ${attempt} of ${retries + 1} failed: ${message}. Retrying in ${delay}ms.`);
+            clearTimeout(timer);
             await (0, sleep_1.sleep)(delay);
         }
         finally {
@@ -32234,7 +32275,16 @@ function readCredentials() {
     }
     if (!apiToken) {
         if (hasGitHubOidc()) {
-            return { kind: 'oidc', ...readRunIdentifiers('GitHub Actions OIDC') };
+            const policyId = input('oidc-policy-id', process.env.CURRENTS_OIDC_POLICY_ID?.trim());
+            if (!policyId) {
+                throw new Error('GitHub Actions OIDC requires oidc-policy-id. Pass it to this step, or export CURRENTS_OIDC_POLICY_ID on the job.');
+            }
+            core.setSecret(policyId);
+            return {
+                kind: 'oidc',
+                policyId,
+                ...readRunIdentifiers('GitHub Actions OIDC')
+            };
         }
         throw new Error('Provide record-key, or api-token to cancel with a Currents API key. Without a stored record key, add `permissions: id-token: write` to the job to get a record key from its GitHub Actions OIDC token.');
     }
@@ -32321,7 +32371,7 @@ async function run() {
                 ? credentials.recordKey
                 : await (0, oidc_1.getRecordKeyFromOidc)({
                     directorUrl,
-                    projectId: credentials.projectId,
+                    policyId: credentials.policyId,
                     audience: (0, inputs_1.readOidcAudience)()
                 });
             core.info('Cancelling the run with a record key');
@@ -32436,6 +32486,7 @@ const api_1 = __nccwpck_require__(6879);
 const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange';
 const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:jwt';
 const TOKEN_NAME = 'GitHub Actions OIDC token';
+const EXCHANGE_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' };
 /** Revoke runs after the cancel and only saves the key's remaining minutes. */
 const REVOKE_TIMEOUT_MS = 5_000;
@@ -32491,11 +32542,9 @@ async function getGitHubOidcToken(audience) {
 }
 /**
  * Exchanges the job's GitHub Actions OIDC token (RFC 8693) for a short-lived
- * record key. The server uses `project_id` to find the organization whose
- * trust policies it checks the token against, and refuses an exchange without
- * it.
+ * record key using the selected trust policy.
  */
-async function getRecordKeyFromOidc({ directorUrl, projectId, audience }) {
+async function getRecordKeyFromOidc({ directorUrl, policyId, audience }) {
     let oidcToken;
     try {
         oidcToken = await getGitHubOidcToken(audience);
@@ -32513,8 +32562,11 @@ async function getRecordKeyFromOidc({ directorUrl, projectId, audience }) {
                 grant_type: GRANT_TYPE,
                 subject_token: oidcToken,
                 subject_token_type: SUBJECT_TOKEN_TYPE,
-                project_id: projectId
+                policy_id: policyId
             }).toString()
+        }, {
+            redactValues: [policyId, oidcToken],
+            retryStatuses: EXCHANGE_RETRY_STATUSES
         });
     }
     catch (error) {

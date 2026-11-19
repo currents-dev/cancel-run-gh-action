@@ -11,6 +11,7 @@ const RETRIES = 3
 const RETRY_BASE_DELAY_MS = 1000
 const RETRY_MAX_DELAY_MS = 8000
 const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504])
+const RETRY_AFTER_MAX_MS = 60_000
 /** Per attempt, for the response headers and the body together. */
 const REQUEST_TIMEOUT_MS = 30_000
 
@@ -22,10 +23,50 @@ export type HttpResponse = {
   text: string
 }
 
-class RetriableError extends Error {}
+class RetriableError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterMs?: number
+  ) {
+    super(message)
+  }
+}
 
 /** Thrown inside the retry loop for something retrying cannot change. */
 class FatalError extends Error {}
+
+// The three HTTP-date formats of RFC 9110 section 5.6.7. Date.parse alone
+// would also accept values like "-1" or "1.5" as dates.
+const IMF_FIXDATE =
+  /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/
+const RFC850_DATE =
+  /^[A-Z][a-z]+, \d{2}-[A-Z][a-z]{2}-\d{2} \d{2}:\d{2}:\d{2} GMT$/
+const ASCTIME_DATE =
+  /^[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} \d{4}$/
+
+/**
+ * Reads both forms of Retry-After from RFC 9110 section 10.2.3: a number of
+ * seconds, or an HTTP date. A date in the past means no wait.
+ */
+export function parseRetryAfter(
+  header: string | null,
+  now = Date.now()
+): number | undefined {
+  const value = header?.trim()
+  if (!value) return undefined
+
+  if (/^\d+$/.test(value)) return Number(value) * 1000
+
+  let date = NaN
+  if (IMF_FIXDATE.test(value) || RFC850_DATE.test(value)) {
+    date = Date.parse(value)
+  } else if (ASCTIME_DATE.test(value)) {
+    // asctime has no zone, and Date.parse would read it as local time.
+    date = Date.parse(`${value} GMT`)
+  }
+
+  return Number.isNaN(date) ? undefined : Math.max(date - now, 0)
+}
 
 function parseBody(text: string): ResponseBody {
   try {
@@ -140,7 +181,9 @@ export async function request(
         redirect: 'manual',
         signal: deadline.signal
       })
-      const text = await response.text()
+      const responseText = await response.text()
+      const text =
+        response.status === 200 ? responseText : redact(responseText, secrets)
       const result = {status: response.status, body: parseBody(text), text}
 
       if (response.status >= 300 && response.status < 400) {
@@ -155,13 +198,26 @@ export async function request(
       }
 
       if (retryStatuses.has(response.status)) {
-        throw new RetriableError(describe(result, secrets))
+        const retryAfterMs =
+          response.status === 429
+            ? parseRetryAfter(response.headers.get('retry-after'))
+            : undefined
+        if (retryAfterMs !== undefined && retryAfterMs > RETRY_AFTER_MAX_MS) {
+          throw new FatalError(
+            `${describe(result, secrets)}. The server asked to wait ${Math.ceil(
+              retryAfterMs / 1000
+            )} seconds before retrying, more than the ${
+              RETRY_AFTER_MAX_MS / 1000
+            } seconds this action waits.`
+          )
+        }
+        throw new RetriableError(describe(result, secrets), retryAfterMs)
       }
 
       return result
     } catch (error) {
       if (error instanceof FatalError) {
-        throw error
+        throw new Error(redact(error.message, secrets))
       }
 
       // Anything fetch itself throws is a transport failure - the URL was
@@ -175,15 +231,20 @@ export async function request(
         throw new Error(message)
       }
 
-      const delay = Math.min(
+      const defaultDelay = Math.min(
         RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
         RETRY_MAX_DELAY_MS
+      )
+      const delay = Math.max(
+        error instanceof RetriableError ? (error.retryAfterMs ?? 0) : 0,
+        defaultDelay
       )
       core.info(
         `Attempt ${attempt} of ${
           retries + 1
         } failed: ${message}. Retrying in ${delay}ms.`
       )
+      clearTimeout(timer)
       await sleep(delay)
     } finally {
       clearTimeout(timer)

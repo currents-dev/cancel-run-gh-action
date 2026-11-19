@@ -29,7 +29,7 @@ The action accepts either credential.
 
 **`api-token`** — a Currents [API key](https://docs.currents.dev/resources/api/api-keys). It can also identify the run by the GitHub run id and attempt, which the reporter stores on the run, so nothing else is required. Kept for workflows that already use it.
 
-**GitHub Actions OIDC** — with neither `record-key` (or `CURRENTS_RECORD_KEY`) nor `api-token`, a job with `permissions: id-token: write` gets a short-lived record key from its OIDC token, like the Currents reporters do. The token's audience is `currents:record-key`, which Currents cloud accepts. For staging or self-hosted Currents, set `CURRENTS_OIDC_AUDIENCE` (or the `oidc-audience` input) to the audience your server is configured with. The action sends the token and `project-id` to `director-url` and gets back a short-lived record key, cancels with it, then revokes it. It needs `project-id` and `ci-build-id` or `run-id`, as with `record-key`. Pull requests from forks get no OIDC token.
+**GitHub Actions OIDC** — with neither `record-key` (or `CURRENTS_RECORD_KEY`) nor `api-token`, a job with `permissions: id-token: write` gets a short-lived record key from its OIDC token, like the Currents reporters do. The token's audience is `currents:record-key`, which Currents cloud accepts. For staging or self-hosted Currents, set `CURRENTS_OIDC_AUDIENCE` (or the `oidc-audience` input) to the audience your server is configured with. Set `oidc-policy-id` or `CURRENTS_OIDC_POLICY_ID` to the trust policy ID. The action sends the token and `policy_id` to `director-url` and gets back a short-lived record key, cancels with it, then revokes it. It needs `project-id` and `ci-build-id` or `run-id`, as with `record-key`. Pull requests from forks get no OIDC token.
 
 If more than one is available, `record-key` is used first, then `api-token`, then OIDC.
 
@@ -45,7 +45,7 @@ With `record-key`, the run is identified by either `ci-build-id` or `run-id`. `r
 
 ## Inputs
 
-Every input is optional. `record-key`, `project-id`, `ci-build-id`, `run-id` and `oidc-audience` fall back to `CURRENTS_RECORD_KEY`, `CURRENTS_PROJECT_ID`, `CURRENTS_CI_BUILD_ID`, `CURRENTS_RUN_ID` and `CURRENTS_OIDC_AUDIENCE`.
+Every input is optional. `record-key`, `project-id`, `ci-build-id`, `run-id`, `oidc-policy-id` and `oidc-audience` fall back to `CURRENTS_RECORD_KEY`, `CURRENTS_PROJECT_ID`, `CURRENTS_CI_BUILD_ID`, `CURRENTS_RUN_ID`, `CURRENTS_OIDC_POLICY_ID` and `CURRENTS_OIDC_AUDIENCE`.
 
 | Input                | Description                                                                                                                            |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -57,6 +57,7 @@ Every input is optional. `record-key`, `project-id`, `ci-build-id`, `run-id` and
 | `github-run-id`      | Only used with `api-token`. Defaults to the current workflow run.                                                                      |
 | `github-run-attempt` | Only used with `api-token`. Defaults to the current workflow run attempt.                                                              |
 | `director-url`       | Currents reporting URL, used with `record-key` and OIDC. Defaults to `https://cy.currents.dev`.                                        |
+| `oidc-policy-id`     | Currents trust policy ID. Required for OIDC; defaults to `CURRENTS_OIDC_POLICY_ID`.                                                    |
 | `oidc-audience`      | Audience of the GitHub Actions OIDC token. Defaults to `CURRENTS_OIDC_AUDIENCE`, then `currents:record-key`.                           |
 | `api-url`            | Currents REST API URL, used with `api-token`. Defaults to `https://api.currents.dev/v1`.                                               |
 
@@ -86,6 +87,7 @@ With `record-key`, `project-id` and one of `ci-build-id` / `run-id` must be avai
 ### With GitHub Actions OIDC
 
 No stored record key. The reporting step gets its record key the same way.
+Set the trust policy ID as a GitHub Actions variable.
 
 ```yaml
 permissions:
@@ -93,6 +95,7 @@ permissions:
   contents: read
 
 env:
+  CURRENTS_OIDC_POLICY_ID: ${{ vars.CURRENTS_OIDC_POLICY_ID }}
   CURRENTS_PROJECT_ID: my-project-id
   CURRENTS_CI_BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
 

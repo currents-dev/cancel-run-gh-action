@@ -5,6 +5,8 @@ const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:token-exchange'
 const SUBJECT_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:jwt'
 const TOKEN_NAME = 'GitHub Actions OIDC token'
 
+const EXCHANGE_RETRY_STATUSES = new Set([429, 500, 502, 503, 504])
+
 const FORM_HEADERS = {'Content-Type': 'application/x-www-form-urlencoded'}
 /** Revoke runs after the cancel and only saves the key's remaining minutes. */
 const REVOKE_TIMEOUT_MS = 5_000
@@ -76,17 +78,15 @@ async function getGitHubOidcToken(audience: string): Promise<string> {
 
 /**
  * Exchanges the job's GitHub Actions OIDC token (RFC 8693) for a short-lived
- * record key. The server uses `project_id` to find the organization whose
- * trust policies it checks the token against, and refuses an exchange without
- * it.
+ * record key using the selected trust policy.
  */
 export async function getRecordKeyFromOidc({
   directorUrl,
-  projectId,
+  policyId,
   audience
 }: {
   directorUrl: string
-  projectId: string
+  policyId: string
   audience: string
 }): Promise<string> {
   let oidcToken: string
@@ -109,16 +109,23 @@ export async function getRecordKeyFromOidc({
   let response: HttpResponse
 
   try {
-    response = await request(`${directorUrl}/oidc/token`, {
-      method: 'POST',
-      headers: FORM_HEADERS,
-      body: new URLSearchParams({
-        grant_type: GRANT_TYPE,
-        subject_token: oidcToken,
-        subject_token_type: SUBJECT_TOKEN_TYPE,
-        project_id: projectId
-      }).toString()
-    })
+    response = await request(
+      `${directorUrl}/oidc/token`,
+      {
+        method: 'POST',
+        headers: FORM_HEADERS,
+        body: new URLSearchParams({
+          grant_type: GRANT_TYPE,
+          subject_token: oidcToken,
+          subject_token_type: SUBJECT_TOKEN_TYPE,
+          policy_id: policyId
+        }).toString()
+      },
+      {
+        redactValues: [policyId, oidcToken],
+        retryStatuses: EXCHANGE_RETRY_STATUSES
+      }
+    )
   } catch (error) {
     throw exchangeError(error instanceof Error ? error.message : String(error))
   }
