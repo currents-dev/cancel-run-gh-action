@@ -29,9 +29,29 @@ The action accepts either credential.
 
 **`api-token`** — a Currents [API key](https://docs.currents.dev/resources/api/api-keys). It can also identify the run by the GitHub run id and attempt, which the reporter stores on the run, so nothing else is required. Kept for workflows that already use it.
 
-**GitHub Actions OIDC** — with neither `record-key` (or `CURRENTS_RECORD_KEY`) nor `api-token`, a job with `permissions: id-token: write` gets a short-lived record key from its OIDC token, like the Currents reporters do. The token's audience is `currents:record-key`, which Currents cloud accepts. For staging or self-hosted Currents, set `CURRENTS_OIDC_AUDIENCE` (or the `oidc-audience` input) to the audience your server is configured with. Set `oidc-policy-id` or `CURRENTS_OIDC_POLICY_ID` to the trust policy ID. The action sends the token and `policy_id` to `director-url` and gets back a short-lived record key, cancels with it, then revokes it. It needs `project-id` and `ci-build-id` or `run-id`, as with `record-key`. Pull requests from forks get no OIDC token.
+If both are provided, `record-key` is used.
 
-If more than one is available, `record-key` is used first, then `api-token`, then OIDC.
+### Without a stored secret
+
+The action takes no OIDC inputs. To use GitHub Actions OIDC instead of a stored record key, get a record key with [`@currents/cmd`](https://docs.currents.dev/resources/reporters/currents-cmd) in a step before the tests, and export it as `CURRENTS_RECORD_KEY`. The job needs `permissions: id-token: write`.
+
+```yaml
+permissions:
+  id-token: write
+  contents: read
+
+steps:
+  - name: Get a Currents record key
+    env:
+      CURRENTS_OIDC_POLICY_ID: ${{ vars.CURRENTS_OIDC_POLICY_ID }}
+    run: |
+      key=$(npx --yes --ignore-scripts --package @currents/cmd@3.4.0 \
+        currents ci auth get-record-key --oidc-provider github-actions)
+      echo "::add-mask::$key"
+      echo "CURRENTS_RECORD_KEY=$key" >> "$GITHUB_ENV"
+```
+
+The reporting step and this action then read `CURRENTS_RECORD_KEY` from the environment. Use `currents ci auth get-api-token` the same way to get an API key for `api-token`.
 
 ## Identifying the run
 
@@ -45,21 +65,19 @@ With `record-key`, the run is identified by either `ci-build-id` or `run-id`. `r
 
 ## Inputs
 
-Every input is optional. `record-key`, `project-id`, `ci-build-id`, `run-id`, `oidc-policy-id` and `oidc-audience` fall back to `CURRENTS_RECORD_KEY`, `CURRENTS_PROJECT_ID`, `CURRENTS_CI_BUILD_ID`, `CURRENTS_RUN_ID`, `CURRENTS_OIDC_POLICY_ID` and `CURRENTS_OIDC_AUDIENCE`.
+Every input is optional. `record-key`, `project-id`, `ci-build-id` and `run-id` fall back to `CURRENTS_RECORD_KEY`, `CURRENTS_PROJECT_ID`, `CURRENTS_CI_BUILD_ID` and `CURRENTS_RUN_ID`.
 
-| Input                | Description                                                                                                                            |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `record-key`         | Currents record key. The env fallback is skipped when `api-token` is set. Without it, OIDC is used when the job has `id-token: write`. |
-| `api-token`          | Currents API key. Used when no record key is available.                                                                                |
-| `project-id`         | Currents project ID. Required with `record-key`, optional with `api-token`.                                                            |
-| `ci-build-id`        | CI build ID the run was recorded with.                                                                                                 |
-| `run-id`             | Currents run ID. An alternative to `ci-build-id`, and takes precedence. Only used with `record-key`.                                   |
-| `github-run-id`      | Only used with `api-token`. Defaults to the current workflow run.                                                                      |
-| `github-run-attempt` | Only used with `api-token`. Defaults to the current workflow run attempt.                                                              |
-| `director-url`       | Currents reporting URL, used with `record-key` and OIDC. Defaults to `https://cy.currents.dev`.                                        |
-| `oidc-policy-id`     | Currents trust policy ID. Required for OIDC; defaults to `CURRENTS_OIDC_POLICY_ID`.                                                    |
-| `oidc-audience`      | Audience of the GitHub Actions OIDC token. Defaults to `CURRENTS_OIDC_AUDIENCE`, then `currents:record-key`.                           |
-| `api-url`            | Currents REST API URL, used with `api-token`. Defaults to `https://api.currents.dev/v1`.                                               |
+| Input                | Description                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `record-key`         | Currents record key. The env fallback is skipped when `api-token` is set.                            |
+| `api-token`          | Currents API key. Used when no record key is available.                                              |
+| `project-id`         | Currents project ID. Required with `record-key`, optional with `api-token`.                          |
+| `ci-build-id`        | CI build ID the run was recorded with.                                                               |
+| `run-id`             | Currents run ID. An alternative to `ci-build-id`, and takes precedence. Only used with `record-key`. |
+| `github-run-id`      | Only used with `api-token`. Defaults to the current workflow run.                                    |
+| `github-run-attempt` | Only used with `api-token`. Defaults to the current workflow run attempt.                            |
+| `director-url`       | Currents reporting URL, used with `record-key`. Defaults to `https://cy.currents.dev`.               |
+| `api-url`            | Currents REST API URL, used with `api-token`. Defaults to `https://api.currents.dev/v1`.             |
 
 With `record-key`, `project-id` and one of `ci-build-id` / `run-id` must be available. With `api-token`, nothing else is required.
 
@@ -67,8 +85,8 @@ With `record-key`, `project-id` and one of `ci-build-id` / `run-id` must be avai
 
 - **No run to cancel.** A workflow cancelled before any results reached Currents has no run. The action logs a warning and succeeds, so it does not add a failed step to an already cancelled workflow.
 - **Already cancelled.** Every job of a parallel run can run this step. All but the first find the run already cancelled, which is reported as a success.
-- **Retries.** Network errors and `429`/`5xx` responses are retried three times with a growing delay. Every other error fails the step.
-- **Where the credential goes.** The request to GitHub for the OIDC token, the OIDC token, and the record key it is exchanged for go through the same checks as the other credentials. The GitHub request URL and token are masked before the action writes anything to the log. `director-url` and `api-url` are not pinned to a host, because self-hosted Currents needs them. A URL that is not `http`/`https` fails the step before anything is sent, sending a credential over plain `http` to anything but localhost logs a warning, and redirects are not followed — a `307` would repeat the request, credential included, against a host that was never checked.
+- **Retries.** Network errors, attempts with no response within 30 seconds, and `429`/`5xx` responses are retried three times with a growing delay. A `429` waits for its `Retry-After`, and fails the step when that is over 60 seconds. Every other error fails the step.
+- **Where the credential goes.** `director-url` and `api-url` are not pinned to a host, because self-hosted Currents needs them. A URL that is not `http`/`https` fails the step before anything is sent, sending a credential over plain `http` to anything but localhost logs a warning, and redirects are not followed — a `307` would repeat the request, credential included, against a host that was never checked.
 
 ## Examples
 
@@ -82,30 +100,6 @@ With `record-key`, `project-id` and one of `ci-build-id` / `run-id` must be avai
     record-key: ${{ secrets.CURRENTS_RECORD_KEY }}
     project-id: my-project-id
     ci-build-id: ${{ github.run_id }}-${{ github.run_attempt }}
-```
-
-### With GitHub Actions OIDC
-
-No stored record key. The reporting step gets its record key the same way.
-Set the trust policy ID as a GitHub Actions variable.
-
-```yaml
-permissions:
-  id-token: write
-  contents: read
-
-env:
-  CURRENTS_OIDC_POLICY_ID: ${{ vars.CURRENTS_OIDC_POLICY_ID }}
-  CURRENTS_PROJECT_ID: my-project-id
-  CURRENTS_CI_BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-
-steps:
-  - name: Run tests
-    run: npx playwright test
-
-  - name: Cancel the Currents run
-    if: ${{ cancelled() }}
-    uses: currents-dev/cancel-run-gh-action@v1
 ```
 
 ### Cancelling a known run

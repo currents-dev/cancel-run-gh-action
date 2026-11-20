@@ -2,30 +2,20 @@ import * as core from '@actions/core'
 
 export const DEFAULT_API_URL = 'https://api.currents.dev/v1'
 export const DEFAULT_DIRECTOR_URL = 'https://cy.currents.dev'
-/**
- * The audience Currents cloud accepts, the same default as the Currents
- * reporters. Staging and self-hosted Currents use their own value.
- */
-export const DEFAULT_OIDC_AUDIENCE = 'currents:record-key'
 
 /**
  * The record key path identifies the run within a project, by the run id or by
- * the CI build id it was recorded under.
- */
-type RunIdentifiers = {
-  projectId: string
-  ciBuildId?: string
-  runId?: string
-}
-
-/**
- * `oidc` gets a record key from the job's GitHub Actions OIDC token and then
- * cancels like `record-key`. The API token path can also look the run up by the
- * GitHub run id and attempt stored on it.
+ * the CI build id it was recorded under. The API token path can also look the
+ * run up by the GitHub run id and attempt stored on it.
  */
 export type Credentials =
-  | ({kind: 'record-key'; recordKey: string} & RunIdentifiers)
-  | ({kind: 'oidc'; policyId: string} & RunIdentifiers)
+  | {
+      kind: 'record-key'
+      recordKey: string
+      projectId: string
+      ciBuildId?: string
+      runId?: string
+    }
   | {
       kind: 'api-token'
       apiToken: string
@@ -37,39 +27,6 @@ export type Credentials =
 
 function input(name: string, fallback?: string): string {
   return core.getInput(name, {trimWhitespace: true}) || fallback || ''
-}
-
-/** GitHub sets both variables only for a job with `id-token: write`. */
-function hasGitHubOidc(): boolean {
-  return Boolean(
-    process.env.ACTIONS_ID_TOKEN_REQUEST_URL?.trim() &&
-    process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN?.trim()
-  )
-}
-
-/** `credential` names the credential in the errors. */
-function readRunIdentifiers(credential: string): RunIdentifiers {
-  const projectId = input('project-id', process.env.CURRENTS_PROJECT_ID)
-  const ciBuildId = input('ci-build-id', process.env.CURRENTS_CI_BUILD_ID)
-  const runId = input('run-id', process.env.CURRENTS_RUN_ID)
-
-  if (!projectId) {
-    throw new Error(
-      `${credential} requires project-id. Pass it to this step, or export CURRENTS_PROJECT_ID on the job.`
-    )
-  }
-
-  if (!ciBuildId && !runId) {
-    throw new Error(
-      `${credential} requires ci-build-id or run-id to identify the run. Pass the same ci-build-id the reporting step used, or export CURRENTS_CI_BUILD_ID or CURRENTS_RUN_ID on the job.`
-    )
-  }
-
-  return {
-    projectId,
-    ciBuildId: ciBuildId || undefined,
-    runId: runId || undefined
-  }
 }
 
 export function readCredentials(): Credentials {
@@ -89,30 +46,34 @@ export function readCredentials(): Credentials {
       core.info('Both record-key and api-token were provided, using record-key')
     }
 
-    return {kind: 'record-key', recordKey, ...readRunIdentifiers('record-key')}
+    const projectId = input('project-id', process.env.CURRENTS_PROJECT_ID)
+    const ciBuildId = input('ci-build-id', process.env.CURRENTS_CI_BUILD_ID)
+    const runId = input('run-id', process.env.CURRENTS_RUN_ID)
+
+    if (!projectId) {
+      throw new Error(
+        'record-key requires project-id. Pass it to this step, or export CURRENTS_PROJECT_ID on the job.'
+      )
+    }
+
+    if (!ciBuildId && !runId) {
+      throw new Error(
+        'record-key requires ci-build-id or run-id to identify the run. Pass the same ci-build-id the reporting step used, or export CURRENTS_CI_BUILD_ID or CURRENTS_RUN_ID on the job.'
+      )
+    }
+
+    return {
+      kind: 'record-key',
+      recordKey,
+      projectId,
+      ciBuildId: ciBuildId || undefined,
+      runId: runId || undefined
+    }
   }
 
   if (!apiToken) {
-    if (hasGitHubOidc()) {
-      const policyId = input(
-        'oidc-policy-id',
-        process.env.CURRENTS_OIDC_POLICY_ID?.trim()
-      )
-      if (!policyId) {
-        throw new Error(
-          'GitHub Actions OIDC requires oidc-policy-id. Pass it to this step, or export CURRENTS_OIDC_POLICY_ID on the job.'
-        )
-      }
-      core.setSecret(policyId)
-      return {
-        kind: 'oidc',
-        policyId,
-        ...readRunIdentifiers('GitHub Actions OIDC')
-      }
-    }
-
     throw new Error(
-      'Provide record-key, or api-token to cancel with a Currents API key. Without a stored record key, add `permissions: id-token: write` to the job to get a record key from its GitHub Actions OIDC token.'
+      'Provide record-key, or api-token to cancel with a Currents API key.'
     )
   }
 
@@ -143,13 +104,6 @@ export function readCredentials(): Credentials {
 
 export function readApiUrl(): string {
   return input('api-url', DEFAULT_API_URL).replace(/\/+$/, '')
-}
-
-export function readOidcAudience(): string {
-  return input(
-    'oidc-audience',
-    process.env.CURRENTS_OIDC_AUDIENCE?.trim() || DEFAULT_OIDC_AUDIENCE
-  )
 }
 
 export function readDirectorUrl(): string {
