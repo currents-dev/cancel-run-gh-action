@@ -1,29 +1,13 @@
 import * as core from '@actions/core'
 import {CancelResult, cancelWithApiToken, cancelWithRecordKey} from './api'
-import {
-  readApiUrl,
-  readCredentials,
-  readDirectorUrl,
-  readOidcAudience
-} from './inputs'
-import {getRecordKeyFromOidc, revokeRecordKey} from './oidc'
+import {readApiUrl, readCredentials, readDirectorUrl} from './inputs'
 
 export async function run(): Promise<void> {
   try {
     const credentials = readCredentials()
     let result: CancelResult
 
-    if (credentials.kind !== 'api-token') {
-      const directorUrl = readDirectorUrl()
-      const recordKey =
-        credentials.kind === 'record-key'
-          ? credentials.recordKey
-          : await getRecordKeyFromOidc({
-              directorUrl,
-              policyId: credentials.policyId,
-              audience: readOidcAudience()
-            })
-
+    if (credentials.kind === 'record-key') {
       core.info('Cancelling the run with a record key')
       core.info(`Project id: ${credentials.projectId}`)
       core.info(
@@ -36,19 +20,13 @@ export async function run(): Promise<void> {
         core.info('Both run-id and ci-build-id were provided, using run-id')
       }
 
-      try {
-        result = await cancelWithRecordKey({
-          directorUrl,
-          recordKey,
-          projectId: credentials.projectId,
-          ciBuildId: credentials.ciBuildId,
-          runId: credentials.runId
-        })
-      } finally {
-        if (credentials.kind === 'oidc') {
-          await revokeRecordKey(directorUrl, recordKey)
-        }
-      }
+      result = await cancelWithRecordKey({
+        directorUrl: readDirectorUrl(),
+        recordKey: credentials.recordKey,
+        projectId: credentials.projectId,
+        ciBuildId: credentials.ciBuildId,
+        runId: credentials.runId
+      })
     } else {
       core.info('Cancelling the run with an API key')
       core.info(`GitHub run id: ${credentials.githubRunId}`)

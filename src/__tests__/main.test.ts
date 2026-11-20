@@ -1,5 +1,5 @@
-import {EOL} from 'os'
 import * as core from '@actions/core'
+import {parseRetryAfter} from '../api'
 import {run} from '../main'
 
 jest.mock('../sleep', () => ({sleep: jest.fn().mockResolvedValue(undefined)}))
@@ -34,15 +34,6 @@ function stalled(init: RequestInit): Promise<never> {
   })
 }
 
-/** A server that sends the headers and then never finishes the body. */
-function stalledBody(init: RequestInit): Response {
-  return {
-    status: 200,
-    headers: {get: () => null},
-    text: async () => stalled(init)
-  } as unknown as Response
-}
-
 function lastRequest(): {url: string; init: RequestInit; body: unknown} {
   const [url, init] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1]
   return {url, init, body: JSON.parse(init.body)}
@@ -52,11 +43,7 @@ const CURRENTS_ENV = [
   'CURRENTS_RECORD_KEY',
   'CURRENTS_PROJECT_ID',
   'CURRENTS_CI_BUILD_ID',
-  'CURRENTS_RUN_ID',
-  'ACTIONS_ID_TOKEN_REQUEST_URL',
-  'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
-  'CURRENTS_OIDC_POLICY_ID',
-  'CURRENTS_OIDC_AUDIENCE'
+  'CURRENTS_RUN_ID'
 ]
 
 beforeEach(() => {
@@ -80,9 +67,7 @@ describe('credentials', () => {
     await run()
 
     expect(setFailed).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Provide record-key, or api-token to cancel with a Currents API key.'
-      )
+      'Provide record-key, or api-token to cancel with a Currents API key.'
     )
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -482,658 +467,80 @@ describe('the destination of a credential', () => {
   })
 })
 
-describe('cancelling with a record key from GitHub Actions OIDC', () => {
-  const POLICY_ID = '0123456789abcdef01234567'
-  const OIDC_TOKEN = 'header.oidc-token-payload.signature'
-  const OIDC_RECORD_KEY = 'crnts_ci_exchanged-key'
-
-  // The secret part of the URL GitHub gives the job.
-  const REQUEST_URL_SECRET = 'request-url-secret'
-  const REQUEST_URL = `https://token.actions.example.com/${REQUEST_URL_SECRET}?api-version=2.0`
-  const REQUEST_TOKEN = 'request-token'
-
-  // Requests to GitHub go to githubFetch, the rest to fetchMock.
-  const githubFetch = jest.fn()
-
-  function githubIssued(): Response {
-    return reply(200, {value: OIDC_TOKEN})
-  }
-
-  function requestedAudience(): string | null {
-    return new URL(githubFetch.mock.calls[0][0]).searchParams.get('audience')
-  }
-
-  function exchanged(): Response {
-    return reply(200, {
-      access_token: OIDC_RECORD_KEY,
-      issued_token_type: 'urn:ietf:params:oauth:token-type:access_token',
-      token_type: 'Bearer',
-      expires_in: 21600
-    })
-  }
-
-  function formRequest(index: number): {
-    url: string
-    init: RequestInit
-    form: URLSearchParams
-  } {
-    const [url, init] = fetchMock.mock.calls[index]
-    return {url, init, form: new URLSearchParams(init.body)}
-  }
+describe('waiting between attempts', () => {
+  const NOW = Date.parse('2026-11-19T12:00:00Z')
 
   beforeEach(() => {
-    process.env['ACTIONS_ID_TOKEN_REQUEST_URL'] = REQUEST_URL
-    process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = REQUEST_TOKEN
-    process.env['INPUT_PROJECT-ID'] = PROJECT_ID
-    process.env['INPUT_OIDC-POLICY-ID'] = POLICY_ID
-    process.env['INPUT_CI-BUILD-ID'] = CI_BUILD_ID
-    process.env['INPUT_DIRECTOR-URL'] = DIRECTOR_URL
-    githubFetch.mockReset()
-    githubFetch.mockResolvedValue(githubIssued())
-    global.fetch = (async (url: string, init: RequestInit) =>
-      url.startsWith('https://token.actions.example.com/')
-        ? githubFetch(url, init)
-        : fetchMock(url, init)) as unknown as typeof fetch
+    jest.useFakeTimers({now: NOW})
+    process.env['INPUT_API-TOKEN'] = API_TOKEN
+    process.env['INPUT_API-URL'] = API_URL
   })
 
   afterEach(() => {
-    global.fetch = fetchMock as unknown as typeof fetch
+    jest.useRealTimers()
   })
 
-  test('exchanges the OIDC token and cancels with the record key it gets', async () => {
-    const setFailed = jest.spyOn(core, 'setFailed')
-    const warning = jest.spyOn(core, 'warning')
-    const setSecret = jest.spyOn(core, 'setSecret')
+  test.each([
+    ['30', 30000],
+    [' 30 ', 30000],
+    ['Thu, 19 Nov 2026 12:00:30 GMT', 30000],
+    ['Thursday, 19-Nov-26 12:00:30 GMT', 30000],
+    ['Thu Nov 19 12:00:30 2026', 30000],
+    ['Thu, 19 Nov 2026 11:00:00 GMT', 0],
+    ['1.5', undefined],
+    ['-1', undefined],
+    ['soon', undefined],
+    ['', undefined],
+    [null, undefined]
+  ])('parseRetryAfter(%p) is %p ms', (header, expected) => {
+    expect(parseRetryAfter(header, NOW)).toBe(expected)
+  })
+
+  test('waits for Retry-After on a 429', async () => {
     const info = jest.spyOn(core, 'info')
     fetchMock
-      .mockResolvedValueOnce(exchanged())
-      .mockResolvedValueOnce(reply(200, {status: 'OK', data: {runId: 'run-1'}}))
-      .mockResolvedValueOnce(reply(200, ''))
-
-    await run()
-
-    const [githubUrl, githubInit] = githubFetch.mock.calls[0]
-    expect(requestedAudience()).toBe('currents:record-key')
-    expect(githubUrl).toContain('api-version=2.0')
-    expect(githubInit.method).toBe('GET')
-    expect(githubInit.redirect).toBe('manual')
-    expect(githubInit.headers.Authorization).toBe(`Bearer ${REQUEST_TOKEN}`)
-
-    const exchange = formRequest(0)
-    expect(exchange.url).toBe(`${DIRECTOR_URL}/oidc/token`)
-    expect(exchange.init.method).toBe('POST')
-    expect(exchange.init.redirect).toBe('manual')
-    expect(Object.fromEntries(exchange.form)).toEqual({
-      grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
-      subject_token: OIDC_TOKEN,
-      subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
-      policy_id: POLICY_ID
-    })
-
-    const [cancelUrl, cancelInit] = fetchMock.mock.calls[1]
-    expect(cancelUrl).toBe(`${DIRECTOR_URL}/v1/runs/cancel`)
-    expect(JSON.parse(cancelInit.body)).toEqual({
-      recordKey: OIDC_RECORD_KEY,
-      projectId: PROJECT_ID,
-      ciBuildId: CI_BUILD_ID
-    })
-
-    const revoke = formRequest(2)
-    expect(revoke.url).toBe(`${DIRECTOR_URL}/oidc/revoke`)
-    expect(revoke.form.get('token')).toBe(OIDC_RECORD_KEY)
-
-    expect(setSecret).toHaveBeenCalledWith(OIDC_RECORD_KEY)
-    expect(info).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Using a record key from the GitHub Actions OIDC token, valid until'
-      )
-    )
-    expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
-    expect(warning).not.toHaveBeenCalled()
-    expect(setFailed).not.toHaveBeenCalled()
-  })
-
-  test.each([
-    [
-      'an OAuth error that echoes the key',
-      () =>
-        reply(400, {
-          error: 'invalid_request',
-          error_description: `Unknown token ${OIDC_RECORD_KEY}`
-        }),
-      'HTTP 400'
-    ],
-    [
-      'a body whose 200-character cut splits the key',
-      () => reply(400, `${'x'.repeat(195)}${OIDC_RECORD_KEY}`),
-      'HTTP 400'
-    ],
-    [
-      'a retryable status whose message echoes the key',
-      () => reply(503, {message: `Unknown token ${OIDC_RECORD_KEY}`}),
-      'the request failed or timed out'
-    ]
-  ])(
-    'warns without server text when the revoke gets %s, and the cancel still succeeds',
-    async (_name, revokeReply, failure) => {
-      const setFailed = jest.spyOn(core, 'setFailed')
-      const warning = jest.spyOn(core, 'warning')
-      const info = jest.spyOn(core, 'info')
-      fetchMock
-        .mockResolvedValueOnce(exchanged())
-        .mockResolvedValueOnce(
-          reply(200, {status: 'OK', data: {runId: 'run-1'}})
-        )
-        .mockResolvedValueOnce(revokeReply())
-
-      await run()
-
-      expect(warning).toHaveBeenCalledTimes(1)
-      expect(warning).toHaveBeenCalledWith(
-        `Could not revoke the record key from OIDC (${failure}). It expires on its own.`
-      )
-      expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
-      expect(setFailed).not.toHaveBeenCalled()
-    }
-  )
-
-  describe('a server that does not respond', () => {
-    beforeEach(() => {
-      jest.useFakeTimers()
-    })
-
-    afterEach(() => {
-      jest.useRealTimers()
-    })
-
-    test('gives up on the revoke after 5 seconds, and the cancel still succeeds', async () => {
-      const setFailed = jest.spyOn(core, 'setFailed')
-      const warning = jest.spyOn(core, 'warning')
-      const info = jest.spyOn(core, 'info')
-      fetchMock
-        .mockResolvedValueOnce(exchanged())
-        .mockResolvedValueOnce(
-          reply(200, {status: 'OK', data: {runId: 'run-1'}})
-        )
-        .mockImplementationOnce((_url: string, init: RequestInit) =>
-          stalled(init)
-        )
-
-      const done = run()
-      await jest.advanceTimersByTimeAsync(5_000)
-      await done
-
-      expect(fetchMock).toHaveBeenCalledTimes(3)
-      expect(warning).toHaveBeenCalledWith(
-        expect.stringContaining('Could not revoke the record key from OIDC')
-      )
-      expect(info).toHaveBeenCalledWith('Run run-1 was cancelled')
-      expect(setFailed).not.toHaveBeenCalled()
-    })
-
-    test('gives up on an exchange whose body never ends after 30 seconds an attempt', async () => {
-      const setFailed = jest.spyOn(core, 'setFailed')
-      fetchMock.mockImplementation((_url: string, init: RequestInit) =>
-        stalledBody(init)
-      )
-
-      const done = run()
-      for (let attempt = 0; attempt < 4; attempt++) {
-        await jest.advanceTimersByTimeAsync(30_000)
-      }
-      await done
-
-      expect(fetchMock).toHaveBeenCalledTimes(4)
-      expect(setFailed).toHaveBeenCalledWith(
-        expect.stringContaining('did not respond within 30 seconds')
-      )
-    })
-
-    test('gives up on a GitHub token request that never answers', async () => {
-      const setFailed = jest.spyOn(core, 'setFailed')
-      githubFetch.mockImplementation((_url: string, init: RequestInit) =>
-        stalled(init)
-      )
-
-      const done = run()
-      for (let attempt = 0; attempt < 4; attempt++) {
-        await jest.advanceTimersByTimeAsync(30_000)
-      }
-      await done
-
-      expect(setFailed).toHaveBeenCalledWith(
-        expect.stringContaining(
-          'The GitHub OIDC token request did not respond within 30 seconds'
-        )
-      )
-      expect(fetchMock).not.toHaveBeenCalled()
-    })
-  })
-
-  test('uses the environment policy ID without a project selector', async () => {
-    delete process.env['INPUT_OIDC-POLICY-ID']
-    process.env['CURRENTS_OIDC_POLICY_ID'] = POLICY_ID
-    fetchMock.mockResolvedValue(reply(400, {}))
-    await run()
-    expect(formRequest(0).form.get('policy_id')).toBe(POLICY_ID)
-    expect(formRequest(0).form.has('project_id')).toBe(false)
-  })
-
-  test('prefers the policy input to the environment', async () => {
-    process.env['CURRENTS_OIDC_POLICY_ID'] = 'another-policy'
-    fetchMock.mockResolvedValue(reply(400, {}))
-    await run()
-    expect(formRequest(0).form.get('policy_id')).toBe(POLICY_ID)
-  })
-
-  test('requires a policy ID before requesting a token', async () => {
-    delete process.env['INPUT_OIDC-POLICY-ID']
-    await run()
-    expect(core.setFailed).toHaveBeenCalledWith(
-      expect.stringContaining('CURRENTS_OIDC_POLICY_ID')
-    )
-    expect(githubFetch).not.toHaveBeenCalled()
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  test.each([400, 503])(
-    'redacts the policy ID in HTTP %s errors and retries',
-    async status => {
-      const info = jest.spyOn(core, 'info')
-      fetchMock.mockResolvedValue(
-        reply(status, {
-          error_description: `Unknown policy ${POLICY_ID}`,
-          error: `Unknown policy ${POLICY_ID}`
-        })
-      )
-      await run()
-      expect(core.setFailed).toHaveBeenCalledWith(
-        expect.stringContaining('***')
-      )
-      expect(
-        JSON.stringify(jest.mocked(core.setFailed).mock.calls)
-      ).not.toContain(POLICY_ID)
-      expect(JSON.stringify(info.mock.calls)).not.toContain(POLICY_ID)
-    }
-  )
-
-  test('redacts a policy ID before an error body is truncated', async () => {
-    fetchMock.mockResolvedValue(reply(400, `${'x'.repeat(195)}${POLICY_ID}`))
-    await run()
-    expect(
-      JSON.stringify(jest.mocked(core.setFailed).mock.calls)
-    ).not.toContain(POLICY_ID.slice(0, 5))
-  })
-
-  test('requests the token for currents:record-key whatever director-url is', async () => {
-    process.env['INPUT_DIRECTOR-URL'] = 'https://currents.example.com/cy'
-    fetchMock.mockResolvedValue(reply(404, {}))
-
-    await run()
-
-    expect(requestedAudience()).toBe('currents:record-key')
-  })
-
-  test('requests the token for the audience in CURRENTS_OIDC_AUDIENCE', async () => {
-    process.env['CURRENTS_OIDC_AUDIENCE'] = ' currents:record-key:staging '
-    fetchMock.mockResolvedValue(reply(404, {}))
-
-    await run()
-
-    expect(requestedAudience()).toBe('currents:record-key:staging')
-  })
-
-  test('prefers the oidc-audience input to CURRENTS_OIDC_AUDIENCE', async () => {
-    process.env['CURRENTS_OIDC_AUDIENCE'] = 'currents:record-key:staging'
-    process.env['INPUT_OIDC-AUDIENCE'] = 'currents:record-key:acme'
-    fetchMock.mockResolvedValue(reply(404, {}))
-
-    await run()
-
-    expect(requestedAudience()).toBe('currents:record-key:acme')
-  })
-
-  test('uses a record key when one is provided', async () => {
-    process.env['CURRENTS_RECORD_KEY'] = RECORD_KEY
-    fetchMock.mockResolvedValue(
-      reply(200, {status: 'OK', data: {runId: 'run-1'}})
-    )
-
-    await run()
-
-    expect(githubFetch).not.toHaveBeenCalled()
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(lastRequest().body).toMatchObject({recordKey: RECORD_KEY})
-  })
-
-  test('uses api-token when one is provided', async () => {
-    process.env['INPUT_API-TOKEN'] = API_TOKEN
-    process.env['INPUT_API-URL'] = API_URL
-    fetchMock.mockResolvedValue(reply(200, {status: 'OK', data: {}}))
-
-    await run()
-
-    expect(githubFetch).not.toHaveBeenCalled()
-    expect(lastRequest().url).toBe(`${API_URL}/runs/cancel-ci/github`)
-  })
-
-  test('is not used without both GitHub OIDC variables', async () => {
-    delete process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN']
-    const setFailed = jest.spyOn(core, 'setFailed')
-
-    await run()
-
-    expect(githubFetch).not.toHaveBeenCalled()
-    expect(setFailed).toHaveBeenCalledWith(
-      expect.stringContaining('permissions: id-token: write')
-    )
-  })
-
-  test('requires the run identifiers before getting a token', async () => {
-    delete process.env['INPUT_PROJECT-ID']
-    const setFailed = jest.spyOn(core, 'setFailed')
-
-    await run()
-
-    expect(setFailed).toHaveBeenCalledWith(
-      expect.stringContaining('GitHub Actions OIDC requires project-id')
-    )
-    expect(githubFetch).not.toHaveBeenCalled()
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  test('fails when GitHub does not issue a token', async () => {
-    githubFetch.mockResolvedValue(reply(403, {message: 'Forbidden'}))
-    const setFailed = jest.spyOn(core, 'setFailed')
-
-    await run()
-
-    expect(setFailed).toHaveBeenCalledWith(
-      'Could not get the GitHub Actions OIDC token: GitHub did not issue a token (HTTP 403)'
-    )
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  test.each([408, 425])('does not retry GitHub HTTP %s', async status => {
-    githubFetch.mockResolvedValue(reply(status, 'Request refused'))
-    const setFailed = jest.spyOn(core, 'setFailed')
-
-    await run()
-
-    expect(githubFetch).toHaveBeenCalledTimes(1)
-    expect(fetchMock).not.toHaveBeenCalled()
-    expect(setFailed).toHaveBeenCalledWith(
-      `Could not get the GitHub Actions OIDC token: GitHub did not issue a token (HTTP ${status})`
-    )
-  })
-
-  test.each([
-    ['request token', REQUEST_TOKEN],
-    ['request URL', REQUEST_URL],
-    [
-      'request URL with audience',
-      `${REQUEST_URL}&audience=currents%3Arecord-key`
-    ]
-  ])(
-    'redacts the GitHub %s before truncating error text',
-    async (_name, secret) => {
-      const info = jest.spyOn(core, 'info').mockImplementation(() => undefined)
-      const setFailed = jest.spyOn(core, 'setFailed')
-      githubFetch.mockResolvedValue(reply(429, `${'x'.repeat(195)}${secret}`))
-
-      await run()
-
-      expect(githubFetch).toHaveBeenCalledTimes(4)
-      expect(fetchMock).not.toHaveBeenCalled()
-      expect(info).toHaveBeenCalledTimes(3)
-      for (const [message] of info.mock.calls) {
-        expect(message).toContain(`${'x'.repeat(195)}*** (HTTP 429)`)
-        expect(message).not.toContain(secret.slice(0, 5))
-      }
-      expect(setFailed).toHaveBeenCalledWith(
-        `Could not get the GitHub Actions OIDC token: ${'x'.repeat(195)}*** (HTTP 429)`
-      )
-    }
-  )
-
-  test('fails when the response from GitHub has no token', async () => {
-    githubFetch.mockResolvedValue(reply(200, {}))
-    const setFailed = jest.spyOn(core, 'setFailed')
-
-    await run()
-
-    expect(setFailed).toHaveBeenCalledWith(
-      'Could not get the GitHub Actions OIDC token: the response from GitHub has no token'
-    )
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  test('does not follow a redirect of the GitHub token request', async () => {
-    githubFetch.mockResolvedValue(
-      reply(307, '', {location: 'https://elsewhere.example.com/token'})
-    )
-    const setFailed = jest.spyOn(core, 'setFailed')
-
-    await run()
-
-    expect(githubFetch).toHaveBeenCalledTimes(1)
-    expect(githubFetch.mock.calls[0][1].redirect).toBe('manual')
-    expect(setFailed).toHaveBeenCalledWith(
-      'Could not get the GitHub Actions OIDC token: The GitHub OIDC token request redirected to another location (HTTP 307). Redirects are not followed, because the request carries a credential.'
-    )
-    // Not retried, and nothing goes to the redirect host.
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  test('masks the request URL and token before any output', async () => {
-    const output: string[] = []
-    const write = jest
-      .spyOn(process.stdout, 'write')
-      .mockImplementation((chunk: string | Uint8Array) => {
-        output.push(String(chunk))
-        return true
-      })
-    process.env['RUNNER_DEBUG'] = '1'
-
-    try {
-      fetchMock
-        .mockResolvedValueOnce(exchanged())
-        .mockResolvedValueOnce(
-          reply(200, {status: 'OK', data: {runId: 'run-1'}})
-        )
-        .mockResolvedValueOnce(reply(200, ''))
-      await run()
-    } finally {
-      delete process.env['RUNNER_DEBUG']
-      write.mockRestore()
-    }
-
-    const firstUse = output.findIndex(
-      line =>
-        !line.startsWith('::add-mask::') &&
-        (line.includes(REQUEST_URL_SECRET) || line.includes(REQUEST_TOKEN))
-    )
-    expect(firstUse).toBe(-1)
-    expect(output.slice(0, 3)).toEqual([
-      `::add-mask::${POLICY_ID}${EOL}`,
-      `::add-mask::${REQUEST_URL}${EOL}`,
-      `::add-mask::${REQUEST_TOKEN}${EOL}`
-    ])
-    expect(output).toContain(`::add-mask::${OIDC_TOKEN}${EOL}`)
-  })
-
-  test('fails when the exchange is disabled on the server', async () => {
-    const setFailed = jest.spyOn(core, 'setFailed')
-    fetchMock.mockResolvedValue(
-      reply(404, {
-        error: 'invalid_request',
-        error_description: 'OIDC token exchange is disabled',
-        code: 'OIDC_EXCHANGE_DISABLED'
-      })
-    )
-
-    await run()
-
-    expect(setFailed).toHaveBeenCalledWith(
-      'Could not exchange the GitHub Actions OIDC token for a record key: OIDC token exchange is disabled'
-    )
-    // No cancel request, and nothing to revoke.
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  test('fails when the server refuses the token', async () => {
-    const setFailed = jest.spyOn(core, 'setFailed')
-    fetchMock.mockResolvedValue(
-      reply(400, {
-        error: 'invalid_grant',
-        error_description: 'No OIDC trust policy matches the token',
-        code: 'OIDC_NO_MATCHING_POLICY'
-      })
-    )
-
-    await run()
-
-    expect(setFailed).toHaveBeenCalledWith(
-      'Could not exchange the GitHub Actions OIDC token for a record key: No OIDC trust policy matches the token'
-    )
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  test('falls back to the OAuth error code without a description', async () => {
-    const setFailed = jest.spyOn(core, 'setFailed')
-    fetchMock.mockResolvedValue(reply(400, {error: 'invalid_grant'}))
-
-    await run()
-
-    expect(setFailed).toHaveBeenCalledWith(
-      'Could not exchange the GitHub Actions OIDC token for a record key: invalid_grant'
-    )
-  })
-
-  test('fails when the response has no record key', async () => {
-    const setFailed = jest.spyOn(core, 'setFailed')
-    fetchMock.mockResolvedValue(reply(200, {token_type: 'Bearer'}))
-
-    await run()
-
-    expect(setFailed).toHaveBeenCalledWith(
-      'Could not exchange the GitHub Actions OIDC token for a record key: the response has no access token'
-    )
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  test('does not follow a redirect of the exchange', async () => {
-    const setFailed = jest.spyOn(core, 'setFailed')
-    fetchMock.mockResolvedValue(
-      reply(308, '', {location: 'http://elsewhere.example.com/oidc/token'})
-    )
-
-    await run()
-
-    expect(fetchMock.mock.calls[0][1].redirect).toBe('manual')
-    expect(setFailed).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'redirected to http://elsewhere.example.com/oidc/token (HTTP 308)'
-      )
-    )
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  test('does not send the token to a URL that is not http', async () => {
-    process.env['INPUT_DIRECTOR-URL'] = 'file:///etc'
-    const setFailed = jest.spyOn(core, 'setFailed')
-
-    await run()
-
-    expect(setFailed).toHaveBeenCalledWith(
-      expect.stringContaining('is not an http or https URL')
-    )
-    expect(fetchMock).not.toHaveBeenCalled()
-  })
-
-  test('does not follow a redirect of the cancel request, and revokes the key', async () => {
-    const setFailed = jest.spyOn(core, 'setFailed')
-    fetchMock
-      .mockResolvedValueOnce(exchanged())
       .mockResolvedValueOnce(
-        reply(307, '', {
-          location: 'http://elsewhere.example.com/v1/runs/cancel'
-        })
+        reply(429, {error: 'rate limited'}, {'retry-after': '20'})
       )
-      .mockResolvedValueOnce(reply(200, ''))
+      .mockResolvedValueOnce(reply(200, {status: 'OK', data: {}}))
 
     await run()
 
-    expect(fetchMock.mock.calls[1][1].redirect).toBe('manual')
-    expect(setFailed).toHaveBeenCalledWith(
-      expect.stringContaining('redirected to http://elsewhere.example.com')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('Retrying in 20000ms')
     )
-    expect(formRequest(2).url).toBe(`${DIRECTOR_URL}/oidc/revoke`)
-    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
-  test('does not fail or retry when revoking the key fails', async () => {
+  test('fails when Retry-After asks for a wait over 60 seconds', async () => {
     const setFailed = jest.spyOn(core, 'setFailed')
-    fetchMock
-      .mockResolvedValueOnce(exchanged())
-      .mockResolvedValueOnce(reply(200, {status: 'OK', data: {runId: 'run-1'}}))
-      .mockRejectedValueOnce(new TypeError('fetch failed'))
+    fetchMock.mockResolvedValueOnce(
+      reply(429, {error: 'rate limited'}, {'retry-after': '61'})
+    )
 
     await run()
 
-    expect(fetchMock).toHaveBeenCalledTimes(3)
-    expect(setFailed).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(setFailed).toHaveBeenCalledWith(
+      'rate limited (HTTP 429). The server asked to wait 61 seconds before retrying, more than the 60 seconds this action waits.'
+    )
   })
 
-  test('never logs the OIDC token', async () => {
-    const logged: string[] = []
-    for (const method of [
-      'info',
-      'debug',
-      'warning',
-      'error',
-      'notice',
-      'setFailed'
-    ] as const) {
-      jest.spyOn(core, method).mockImplementation((...args: unknown[]) => {
-        logged.push(String(args[0]))
-      })
+  test('gives up on a server that does not answer after 30 seconds an attempt', async () => {
+    const setFailed = jest.spyOn(core, 'setFailed')
+    fetchMock.mockImplementation((_url: string, init: RequestInit) =>
+      stalled(init)
+    )
+
+    const done = run()
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await jest.advanceTimersByTimeAsync(30_000)
     }
-    const write = jest
-      .spyOn(process.stdout, 'write')
-      .mockImplementation((chunk: string | Uint8Array) => {
-        logged.push(String(chunk))
-        return true
-      })
+    await done
 
-    try {
-      // A successful run, a refused token, and a failed request.
-      fetchMock
-        .mockResolvedValueOnce(exchanged())
-        .mockResolvedValueOnce(
-          reply(200, {status: 'OK', data: {runId: 'run-1'}})
-        )
-        .mockResolvedValueOnce(reply(500, ''))
-      await run()
-
-      fetchMock.mockReset()
-      fetchMock.mockResolvedValue(reply(400, {error: 'invalid_grant'}))
-      await run()
-
-      fetchMock.mockReset()
-      fetchMock.mockRejectedValue(new TypeError('fetch failed'))
-      await run()
-    } finally {
-      write.mockRestore()
-    }
-
-    expect(logged.length).toBeGreaterThan(0)
-    // ::add-mask:: is how the runner learns what to hide.
-    const shown = logged
-      .filter(line => !line.startsWith('::add-mask::'))
-      .join('\n')
-    for (const secret of [OIDC_TOKEN, REQUEST_TOKEN, REQUEST_URL_SECRET]) {
-      expect(shown).not.toContain(secret)
-    }
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(setFailed).toHaveBeenCalledWith(
+      expect.stringContaining('did not respond within 30 seconds')
+    )
   })
 })

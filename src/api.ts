@@ -17,7 +17,7 @@ const REQUEST_TIMEOUT_MS = 30_000
 
 type ResponseBody = Record<string, unknown> | null
 
-export type HttpResponse = {
+type HttpResponse = {
   status: number
   body: ResponseBody
   text: string
@@ -79,30 +79,20 @@ function parseBody(text: string): ResponseBody {
   }
 }
 
-export function truncate(text: string, max = 200): string {
+function truncate(text: string, max = 200): string {
   return text.length > max ? `${text.slice(0, max)}…` : text
 }
 
-function redact(text: string, values: readonly string[]): string {
-  for (const value of values) {
-    if (value) text = text.replaceAll(value, '***')
-  }
-  return text
-}
-
-function describe(
-  response: HttpResponse,
-  redactValues: readonly string[] = []
-): string {
+function describe(response: HttpResponse): string {
   const body = response.body ?? {}
   const message =
     typeof body.error === 'string'
       ? body.error
       : typeof body.message === 'string'
         ? body.message
-        : truncate(redact(response.text, redactValues)) || 'no response body'
+        : truncate(response.text) || 'no response body'
 
-  return `${redact(message, redactValues)} (HTTP ${response.status})`
+  return `${message} (HTTP ${response.status})`
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -113,17 +103,17 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
  * for self-hosted Currents, and the smoke test in `test.yml` points them at
  * localhost.
  */
-function checkDestination(url: string, name: string): void {
+function checkDestination(url: string): void {
   let destination: URL
 
   try {
     destination = new URL(url)
   } catch {
-    throw new Error(`${name} is not a valid URL`)
+    throw new Error(`"${url}" is not a valid URL`)
   }
 
   if (destination.protocol !== 'https:' && destination.protocol !== 'http:') {
-    throw new Error(`${name} is not an http or https URL`)
+    throw new Error(`"${url}" is not an http or https URL`)
   }
 
   if (
@@ -136,40 +126,21 @@ function checkDestination(url: string, name: string): void {
   }
 }
 
-/**
- * `label` names the request in messages instead of the URL and the Location of
- * a redirect, for a URL that holds a credential.
- */
-export async function request(
+async function request(
   url: string,
-  init: {method: string; headers: Record<string, string>; body?: string},
-  {
-    retries = RETRIES,
-    label,
-    timeoutMs = REQUEST_TIMEOUT_MS,
-    retryStatuses = RETRIABLE_STATUS,
-    redactValues = []
-  }: {
-    retries?: number
-    label?: string
-    timeoutMs?: number
-    retryStatuses?: ReadonlySet<number>
-    redactValues?: readonly string[]
-  } = {}
+  init: {method: string; headers: Record<string, string>; body: string}
 ): Promise<HttpResponse> {
-  checkDestination(url, label ?? `"${url}"`)
-  // Replace a complete URL before a shorter value contained in it.
-  const secrets = [...redactValues].sort((a, b) => b.length - a.length)
+  checkDestination(url)
 
   for (let attempt = 1; ; attempt++) {
     const deadline = new AbortController()
     const timer = setTimeout(() => {
       deadline.abort(
         new Error(
-          `${label ?? url} did not respond within ${timeoutMs / 1000} seconds`
+          `${url} did not respond within ${REQUEST_TIMEOUT_MS / 1000} seconds`
         )
       )
-    }, timeoutMs)
+    }, REQUEST_TIMEOUT_MS)
 
     try {
       // redirect: 'manual' - fetch follows redirects by default, and a 307/308
@@ -181,53 +152,45 @@ export async function request(
         redirect: 'manual',
         signal: deadline.signal
       })
-      const responseText = await response.text()
-      const text =
-        response.status === 200 ? responseText : redact(responseText, secrets)
+      const text = await response.text()
       const result = {status: response.status, body: parseBody(text), text}
 
       if (response.status >= 300 && response.status < 400) {
-        const location = label
-          ? 'another location'
-          : (response.headers.get('location') ?? 'an unnamed location')
         throw new FatalError(
-          `${label ?? url} redirected to ${location} (HTTP ${
-            response.status
-          }). Redirects are not followed, because the request carries a credential.`
+          `${url} redirected to ${
+            response.headers.get('location') ?? 'an unnamed location'
+          } (HTTP ${response.status}). Redirects are not followed, because the request carries a credential.`
         )
       }
 
-      if (retryStatuses.has(response.status)) {
+      if (RETRIABLE_STATUS.has(response.status)) {
         const retryAfterMs =
           response.status === 429
             ? parseRetryAfter(response.headers.get('retry-after'))
             : undefined
         if (retryAfterMs !== undefined && retryAfterMs > RETRY_AFTER_MAX_MS) {
           throw new FatalError(
-            `${describe(result, secrets)}. The server asked to wait ${Math.ceil(
+            `${describe(result)}. The server asked to wait ${Math.ceil(
               retryAfterMs / 1000
             )} seconds before retrying, more than the ${
               RETRY_AFTER_MAX_MS / 1000
             } seconds this action waits.`
           )
         }
-        throw new RetriableError(describe(result, secrets), retryAfterMs)
+        throw new RetriableError(describe(result), retryAfterMs)
       }
 
       return result
     } catch (error) {
       if (error instanceof FatalError) {
-        throw new Error(redact(error.message, secrets))
+        throw error
       }
 
       // Anything fetch itself throws is a transport failure - the URL was
       // already validated above.
-      const message = redact(
-        error instanceof Error ? error.message : String(error),
-        secrets
-      )
+      const message = error instanceof Error ? error.message : String(error)
 
-      if (attempt > retries) {
+      if (attempt > RETRIES) {
         throw new Error(message)
       }
 
@@ -241,7 +204,7 @@ export async function request(
       )
       core.info(
         `Attempt ${attempt} of ${
-          retries + 1
+          RETRIES + 1
         } failed: ${message}. Retrying in ${delay}ms.`
       )
       clearTimeout(timer)
